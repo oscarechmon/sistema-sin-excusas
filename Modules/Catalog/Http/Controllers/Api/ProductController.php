@@ -8,6 +8,7 @@ use App\Core\Exceptions\BusinessException;
 use App\Core\Http\Controllers\ApiController;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Excel as ExcelWriter;
 use Maatwebsite\Excel\Facades\Excel;
 use Modules\Catalog\Exports\ProductsExport;
@@ -17,6 +18,7 @@ use Modules\Catalog\Http\Resources\ProductResource;
 use Modules\Catalog\Models\Product;
 use Modules\Catalog\Services\BarcodeService;
 use Modules\Catalog\Services\ProductService;
+use Modules\Catalog\Services\WebOrderService;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
@@ -28,6 +30,7 @@ class ProductController extends ApiController
     public function __construct(
         private readonly ProductService $service,
         private readonly BarcodeService $barcodes,
+        private readonly WebOrderService $webOrder,
     ) {
     }
 
@@ -92,6 +95,30 @@ class ProductController extends ApiController
             new ProductResource($model),
             $model->on_promotion ? "«{$model->name}» ahora está en promoción." : "«{$model->name}» ya no está en promoción.",
         );
+    }
+
+    /** Lo publicado de un tipo, por categoría y en el orden en que se ve en la web. */
+    public function webOrder(Request $request): JsonResponse
+    {
+        $type = $request->validate(['type' => ['required', Rule::in(Product::TYPES)]])['type'];
+
+        return $this->ok($this->webOrder->groups($type));
+    }
+
+    /** Guarda qué va primero en la web: categorías e ítems, en el orden en que llegan. */
+    public function saveWebOrder(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'type' => ['required', Rule::in(Product::TYPES)],
+            'categories' => ['present', 'array'],
+            'categories.*' => ['integer'],
+            'items' => ['present', 'array'],
+            'items.*' => ['integer'],
+        ]);
+
+        $this->webOrder->save($data['type'], $data['categories'], $data['items']);
+
+        return $this->ok($this->webOrder->groups($data['type']), 'Listo: la web ya muestra este orden.');
     }
 
     public function destroy(int $product): JsonResponse

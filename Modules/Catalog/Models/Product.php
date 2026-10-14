@@ -52,6 +52,8 @@ class Product extends Model implements Auditable
         'web_published', 'duration_minutes',
         // En promoción: sale en «Promociones» de la web y cobra `offer_price` si lo tiene.
         'on_promotion',
+        // Posición en la web dentro de su categoría (null: al final, por nombre).
+        'sort_order',
     ];
 
     protected $casts = [
@@ -66,6 +68,7 @@ class Product extends Model implements Auditable
         'is_active' => 'boolean',
         'web_published' => 'boolean',
         'on_promotion' => 'boolean',
+        'sort_order' => 'integer',
         'duration_minutes' => 'integer',
     ];
 

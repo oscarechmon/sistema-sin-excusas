@@ -51,6 +51,7 @@ class ProductResource extends JsonResource
             'has_expiry' => $this->has_expiry,
             'is_active' => $this->is_active,
             'web_published' => $this->web_published,
+            'sort_order' => $this->sort_order,
             'duration_minutes' => $this->duration_minutes,
             'created_at' => $this->created_at?->toIso8601String(),
         ];

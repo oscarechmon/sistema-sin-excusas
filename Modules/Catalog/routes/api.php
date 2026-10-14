@@ -20,6 +20,9 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::get('scan/{barcode}', 'scan')->middleware('permission:products.view');
         Route::get('export', 'export')->middleware('permission:products.export');
         Route::post('bulk-destroy', 'bulkDestroy')->middleware('permission:products.delete');
+        // Qué va primero en la web (categorías e ítems de un tipo).
+        Route::get('web-order', 'webOrder')->middleware('permission:products.view');
+        Route::post('web-order', 'saveWebOrder')->middleware('permission:products.edit');
         Route::get('{product}', 'show')->whereNumber('product')->middleware('permission:products.view');
         Route::get('{product}/label', 'label')->whereNumber('product')->middleware('permission:products.print');
         Route::post('{product}/web', 'publish')->whereNumber('product')->middleware('permission:products.edit');

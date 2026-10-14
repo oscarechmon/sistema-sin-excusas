@@ -45,9 +45,29 @@ export interface Product {
     is_active: boolean;
     /** Si se muestra en la web pública; null = aún no se decidió aquí. */
     web_published: boolean | null;
+    /** Posición en la web dentro de su categoría; null = al final, por nombre. */
+    sort_order: number | null;
     /** Duración de un servicio, para la web. */
     duration_minutes: number | null;
     created_at: string | null;
+}
+
+/** Un ítem en «Orden en la web». */
+export interface WebOrderItem {
+    id: number;
+    name: string;
+    code: string;
+    image_url: string | null;
+    price: number;
+    promotion_price: number | null;
+    on_promotion: boolean;
+}
+
+/** Lo publicado de un tipo, por categoría, en el orden en que se ve en la web. */
+export interface WebOrder {
+    categories: { id: number; name: string; items: WebOrderItem[] }[];
+    /** Sin categoría: en la web van siempre al final. */
+    uncategorized: WebOrderItem[];
 }
 
 /** Foto adicional de un producto o servicio (la principal es `image_url`). */
@@ -148,6 +168,15 @@ export const productsApi = {
     async publish(id: number, published: boolean): Promise<{ product: Product; message: string }> {
         const res = await http.post(`/products/${id}/web`, { web_published: published });
         return { product: res.data.data as Product, message: res.data.message as string };
+    },
+    /** Lo publicado de un tipo, en el orden en que se ve en la web. */
+    async webOrder(type: 'product' | 'service'): Promise<WebOrder> {
+        return unwrap<WebOrder>(await http.get('/products/web-order', { params: { type } }));
+    },
+    /** Guarda qué va primero: categorías e ítems en el orden en que se mandan. */
+    async saveWebOrder(type: 'product' | 'service', categories: number[], items: number[]): Promise<{ order: WebOrder; message: string }> {
+        const res = await http.post('/products/web-order', { type, categories, items });
+        return { order: res.data.data as WebOrder, message: res.data.message as string };
     },
     /** Pone o quita de promoción, sin tocar nada más. */
     async promote(id: number, onPromotion: boolean): Promise<{ product: Product; message: string }> {

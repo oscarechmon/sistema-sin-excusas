@@ -242,6 +242,48 @@ class WebCatalogTest extends TestCase
         $this->postJson("/api/v1/products/{$paquete->id}/promotion", ['on_promotion' => true])->assertStatus(422);
     }
 
+    public function test_el_orden_en_la_web_se_guarda_y_llega_a_la_web(): void
+    {
+        $this->actingAsRole('Administrador', $this->env['company'], $this->env['branch']);
+        $faciales = Category::create(['name' => 'Faciales', 'is_active' => true]);
+        $corporales = Category::create(['name' => 'Corporales', 'is_active' => true]);
+        $limpieza = Product::factory()->service()->create(['name' => 'Limpieza', 'category_id' => $faciales->id, 'web_published' => true, 'is_active' => true]);
+        $dermapen = Product::factory()->service()->create(['name' => 'Dermapen', 'category_id' => $faciales->id, 'web_published' => true, 'is_active' => true]);
+        $masaje = Product::factory()->service()->create(['name' => 'Masaje', 'category_id' => $corporales->id, 'web_published' => true, 'is_active' => true]);
+        Product::factory()->service()->create(['name' => 'Oculto', 'category_id' => $faciales->id, 'web_published' => false]);
+        $crema = Product::factory()->create(['category_id' => $faciales->id, 'web_published' => true, 'is_active' => true]);
+
+        // Sin ordenar: categorías como se crearon e ítems por nombre; solo lo que se ve en la web.
+        $order = $this->getJson('/api/v1/products/web-order?type=service')->assertOk()->json('data');
+        $this->assertSame(['Faciales', 'Corporales'], array_column($order['categories'], 'name'));
+        $this->assertSame(['Dermapen', 'Limpieza'], array_column($order['categories'][0]['items'], 'name'));
+
+        config(['integration.web_url' => 'https://web.test']);
+        Http::fake(['web.test/*' => Http::response(['ok' => true])]);
+
+        $this->postJson('/api/v1/products/web-order', [
+            'type' => 'service',
+            'categories' => [$corporales->id, $faciales->id],
+            // Un producto en la lista de servicios se ignora.
+            'items' => [$masaje->id, $limpieza->id, $dermapen->id, $crema->id],
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.categories.0.name', 'Corporales')
+            ->assertJsonPath('data.categories.1.items.0.name', 'Limpieza');
+        app(CatalogNotifier::class)->flush();
+
+        $this->assertSame(2, $limpieza->fresh()->sort_order);
+        $this->assertNull($crema->fresh()->sort_order);
+        Http::assertSent(function (HttpRequest $request) use ($limpieza): bool {
+            $item = collect($request['items'])->firstWhere('id', $limpieza->id);
+
+            return $item !== null && $item['sort_order'] === 2 && $item['category_order'] === 2;
+        });
+
+        $this->actingAsRole('Ventas', $this->env['company'], $this->env['branch']);
+        $this->postJson('/api/v1/products/web-order', ['type' => 'service', 'categories' => [], 'items' => []])->assertForbidden();
+    }
+
     public function test_la_lista_separa_productos_y_servicios_y_filtra_lo_publicado(): void
     {
         $this->actingAsRole('Administrador', $this->env['company'], $this->env['branch']);

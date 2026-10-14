@@ -16,6 +16,7 @@ import { AxiosError } from 'axios';
 import ProductFormDialog from '@/components/catalog/ProductFormDialog.vue';
 import LabelPrintDialog from '@/components/catalog/LabelPrintDialog.vue';
 import ServiceSuppliesDialog from '@/components/catalog/ServiceSuppliesDialog.vue';
+import WebOrderDialog from '@/components/catalog/WebOrderDialog.vue';
 import { categoriesApi, productsApi, type Option, type Product } from '@/services/catalog';
 import { useAuthStore } from '@/stores/auth';
 
@@ -66,6 +67,8 @@ const editing = ref<Product | null>(null);
 
 const labelDialogVisible = ref(false);
 const labelIds = ref<number[]>([]);
+
+const orderVisible = ref(false);
 
 const suppliesVisible = ref(false);
 const suppliesService = ref<Product | null>(null);
@@ -312,6 +315,14 @@ onMounted(() => {
                     @click="exportProducts('xlsx')"
                 />
                 <Button
+                    v-if="auth.can('products.edit')"
+                    label="Orden en la web"
+                    icon="pi pi-sort-alt"
+                    severity="secondary"
+                    outlined
+                    @click="orderVisible = true"
+                />
+                <Button
                     v-if="auth.can('products.create')"
                     :label="`Nuevo ${words.one}`"
                     icon="pi pi-plus"
@@ -326,6 +337,7 @@ onMounted(() => {
                 <strong>Para mostrar un {{ words.one }} en la web</strong> ponle foto, descripción y precio, y activa
                 <strong>«En la web»</strong> en la lista. Se ve al instante en sinexcusas.org.pe{{ isService ? ', agrupado por su categoría (Faciales, Corporales…)' : '' }}.
                 Activa <strong>«Promoción»</strong> para que además salga en <strong>Promociones</strong>; si al editarlo le pones precio de promoción, la web y el POS cobran ese precio.
+                Con <strong>«Orden en la web»</strong> decides qué va primero.
             </p>
         </div>
 
@@ -514,5 +526,6 @@ onMounted(() => {
         <ProductFormDialog v-model:visible="dialogVisible" :product="editing" :kind="kind" @saved="onSaved" />
         <LabelPrintDialog v-model:visible="labelDialogVisible" :ids="labelIds" />
         <ServiceSuppliesDialog v-model:visible="suppliesVisible" :service="suppliesService" />
+        <WebOrderDialog v-model:visible="orderVisible" :kind="kind" />
     </div>
 </template>

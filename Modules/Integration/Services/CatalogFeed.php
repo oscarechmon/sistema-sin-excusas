@@ -10,9 +10,9 @@ use Modules\Packages\Models\Package;
 
 /**
  * Todo lo que la web muestra de cada ítem del catálogo: nombre, categoría,
- * precio, stock y estado, y también lo de la web pública (si se publica, si
- * está en promoción y a qué precio, imagen y fotos adicionales, descripción
- * y, en un servicio, su duración).
+ * precio, stock y estado, y también lo de la web pública (si se publica, en
+ * qué orden, si está en promoción y a qué precio, imagen y fotos adicionales,
+ * descripción y, en un servicio, su duración).
  * La web no guarda nada de esto: lo lee de aquí.
  *
  * Incluye los eliminados (como inactivos) para que la web también los oculte.
@@ -35,7 +35,7 @@ class CatalogFeed
             ->keyBy('product_id');
 
         return Product::withTrashed()
-            ->with(['category:id,name,description', 'unit:id,name', 'images:id,product_id,path,sort_order'])
+            ->with(['category:id,name,description,sort_order', 'unit:id,name', 'images:id,product_id,path,sort_order'])
             ->when($ids !== null, fn ($q) => $q->whereIn('id', $ids))
             ->addSelect(['web_stock' => Stock::select('quantity')
                 ->whereColumn('stocks.product_id', 'products.id')
@@ -58,6 +58,10 @@ class CatalogFeed
             'description' => $product->description,
             'category' => $product->category?->name,
             'category_description' => $product->category?->description,
+            // «Orden en la web»: posición del ítem en su categoría y de la
+            // categoría en la página. Vacío: nunca se ordenó (va al final).
+            'sort_order' => $product->sort_order,
+            'category_order' => $product->category?->sort_order ?: null,
             'unit' => $product->unit?->name,
             'price' => (float) $product->price,
             // En promoción: la web lo muestra en «Promociones». Si tiene precio
