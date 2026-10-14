@@ -73,4 +73,25 @@ class SaleCheckoutTest extends TestCase
         // La cotización no descuenta stock.
         $this->assertEquals(5.0, app(StockService::class)->available($product->id, $warehouseId));
     }
+
+    public function test_en_promocion_se_cobra_el_precio_de_promocion(): void
+    {
+        $env = $this->seedErp();
+        $this->actingAsRole('Caja', $env['company'], $env['branch']);
+        $warehouseId = $env['warehouse']->id;
+        $promo = Product::factory()->create(['price' => 100, 'offer_price' => 80, 'on_promotion' => true]);
+        // Con precio de oferta guardado pero sin promoción, se cobra el normal.
+        $normal = Product::factory()->create(['price' => 50, 'offer_price' => 40, 'on_promotion' => false]);
+        app(StockService::class)->entry($promo->id, $warehouseId, 5, 50);
+        app(StockService::class)->entry($normal->id, $warehouseId, 5, 20);
+
+        $sale = app(SaleService::class)->checkout([
+            'doc_type' => 'ticket',
+            'warehouse_id' => $warehouseId,
+            'items' => [['product_id' => $promo->id, 'quantity' => 2], ['product_id' => $normal->id, 'quantity' => 1]],
+            'payments' => [['method' => 'efectivo', 'amount' => 210]],
+        ]);
+
+        $this->assertEquals(210.0, (float) $sale->total); // 2 × 80 + 50
+    }
 }

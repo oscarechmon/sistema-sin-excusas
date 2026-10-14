@@ -71,10 +71,11 @@ class AttendanceService
             }
 
             // Si la atención salió de un paquete, la base es el valor de la
-            // sesión (precio del paquete / sesiones), no el precio de lista.
+            // sesión (precio del paquete / sesiones), no el precio de lista;
+            // si no, lo que se cobra hoy (el de promoción, si está en promoción).
             $base = $customerPackage
                 ? round((float) $customerPackage->price / max(1, $customerPackage->total_sessions), 2)
-                : (float) $service->price;
+                : $service->salePrice();
 
             $this->commissions->generateForAttendance(
                 $attendance->id,

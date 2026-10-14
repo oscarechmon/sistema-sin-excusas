@@ -37,10 +37,11 @@ class ProductController extends ApiController
         $products = $this->service->list($request->all());
         $data = ProductResource::collection($products)->response()->getData(true);
 
-        // La pantalla de Productos o Servicios muestra cuántos hay en la web:
-        // va en la misma respuesta para no hacer otra petición.
+        // La pantalla de Productos o Servicios muestra cuántos hay en la web y
+        // en promoción: va en la misma respuesta para no hacer otra petición.
         if (in_array($request->query('type'), Product::TYPES, true)) {
             $data['web_published_total'] = Product::where('type', $request->query('type'))->where('web_published', true)->count();
+            $data['promotion_total'] = Product::where('type', $request->query('type'))->where('on_promotion', true)->count();
         }
 
         return $this->ok($data);
@@ -77,6 +78,19 @@ class ProductController extends ApiController
         return $this->ok(
             new ProductResource($model),
             $model->web_published ? "«{$model->name}» ya se muestra en la web." : "«{$model->name}» ya no se muestra en la web.",
+        );
+    }
+
+    /** Poner o quitar de promoción con un clic, desde el listado. */
+    public function promote(Request $request, int $product): JsonResponse
+    {
+        $data = $request->validate(['on_promotion' => ['required', 'boolean']]);
+
+        $model = $this->service->promote($product, (bool) $data['on_promotion']);
+
+        return $this->ok(
+            new ProductResource($model),
+            $model->on_promotion ? "«{$model->name}» ahora está en promoción." : "«{$model->name}» ya no está en promoción.",
         );
     }
 

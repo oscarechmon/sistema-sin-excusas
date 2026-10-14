@@ -182,6 +182,66 @@ class WebCatalogTest extends TestCase
         $this->postJson("/api/v1/products/{$crema->id}/web", ['web_published' => true])->assertForbidden();
     }
 
+    public function test_la_promocion_se_activa_desde_la_lista_y_llega_a_la_web_con_su_precio(): void
+    {
+        $this->actingAsRole('Administrador', $this->env['company'], $this->env['branch']);
+        $facial = Product::factory()->service()->create(['price' => 150, 'offer_price' => 120, 'web_published' => true]);
+        config(['integration.web_url' => 'https://web.test']);
+        Http::fake(['web.test/*' => Http::response(['ok' => true])]);
+
+        $this->postJson("/api/v1/products/{$facial->id}/promotion", ['on_promotion' => true])
+            ->assertOk()
+            ->assertJsonPath('data.on_promotion', true)
+            ->assertJsonPath('data.promotion_price', 120)
+            ->assertJsonPath('message', "«{$facial->name}» ahora está en promoción.");
+        app(CatalogNotifier::class)->flush();
+
+        $this->assertEquals(150, $facial->fresh()->price, 'El precio normal no cambia.');
+        Http::assertSent(fn (HttpRequest $request): bool => $request['items'][0]['id'] === $facial->id
+            && $request['items'][0]['on_promotion'] === true
+            && $request['items'][0]['promotion_price'] == 120
+            && $request['items'][0]['price'] == 150);
+
+        $this->getJson('/api/v1/products?type=service&web=promotion')->assertOk()
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.promotion_total', 1);
+
+        // Al quitarla, el precio de oferta queda guardado pero ya no se cobra.
+        $this->postJson("/api/v1/products/{$facial->id}/promotion", ['on_promotion' => false])
+            ->assertOk()
+            ->assertJsonPath('data.promotion_price', null);
+        $this->assertEquals(120, $facial->fresh()->offer_price);
+    }
+
+    public function test_en_promocion_el_precio_de_promocion_debe_rebajar_el_precio(): void
+    {
+        $this->actingAsRole('Administrador', $this->env['company'], $this->env['branch']);
+        $crema = Product::factory()->create(['price' => 50]);
+
+        $this->putJson("/api/v1/products/{$crema->id}", ['price' => 50, 'offer_price' => 60, 'on_promotion' => true])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('offer_price');
+
+        // Sin precio de promoción también vale: se vende al precio normal.
+        $this->putJson("/api/v1/products/{$crema->id}", ['price' => 50, 'offer_price' => null, 'on_promotion' => true])
+            ->assertOk()
+            ->assertJsonPath('data.on_promotion', true)
+            ->assertJsonPath('data.promotion_price', null);
+
+        // Sin el precio en la petición, se compara con el que ya tiene.
+        $this->putJson("/api/v1/products/{$crema->id}", ['offer_price' => 45, 'on_promotion' => true])
+            ->assertOk()
+            ->assertJsonPath('data.promotion_price', 45);
+    }
+
+    public function test_un_paquete_no_se_pone_en_promocion_desde_productos(): void
+    {
+        $this->actingAsRole('Administrador', $this->env['company'], $this->env['branch']);
+        $paquete = Product::factory()->create(['type' => Product::TYPE_PACKAGE]);
+
+        $this->postJson("/api/v1/products/{$paquete->id}/promotion", ['on_promotion' => true])->assertStatus(422);
+    }
+
     public function test_la_lista_separa_productos_y_servicios_y_filtra_lo_publicado(): void
     {
         $this->actingAsRole('Administrador', $this->env['company'], $this->env['branch']);

@@ -40,11 +40,13 @@ const words = computed(() =>
 const WEB_FILTER = [
     { label: 'Publicados en la web', value: 'published' },
     { label: 'No publicados', value: 'hidden' },
+    { label: 'En promoción', value: 'promotion' },
 ];
 
 const rows = ref<Product[]>([]);
 const total = ref(0);
 const publishedTotal = ref(0);
+const promotionTotal = ref(0);
 const loading = ref(true);
 const selection = ref<Product[]>([]);
 const categories = ref<Option[]>([]);
@@ -54,7 +56,7 @@ const params = reactive({
     per_page: 10,
     search: '',
     category_id: null as number | null,
-    web: null as 'published' | 'hidden' | null,
+    web: null as 'published' | 'hidden' | 'promotion' | null,
     sort_by: 'created_at',
     sort_dir: 'desc' as 'asc' | 'desc',
 });
@@ -77,6 +79,7 @@ async function load(): Promise<void> {
         rows.value = res.data;
         total.value = res.meta.total;
         publishedTotal.value = res.web_published_total ?? 0;
+        promotionTotal.value = res.promotion_total ?? 0;
     } catch {
         toast.add({ severity: 'error', summary: 'Error', detail: `No se pudieron cargar los ${words.value.many}`, life: 3000 });
     } finally {
@@ -177,6 +180,41 @@ async function togglePublish(product: Product, value: boolean): Promise<void> {
     }
 }
 
+// --- Promoción con un clic ------------------------------------------------
+const promoting = ref<number | null>(null);
+
+/** Por qué una promoción todavía no se ve como debería (no impide activarla). */
+function promotionNote(product: Product): string | null {
+    if (!product.on_promotion) return null;
+    if (!product.web_published || !product.is_active) return 'No está publicado en la web (o está inactivo): no se verá en Promociones hasta publicarlo.';
+    if (product.promotion_price === null) return 'Sin precio de promoción: se vende al precio normal. Ponlo al editarlo para mostrarlo rebajado.';
+    return null;
+}
+
+async function togglePromotion(product: Product, value: boolean): Promise<void> {
+    promoting.value = product.id;
+    const before = product.on_promotion;
+    product.on_promotion = value;
+    try {
+        const { product: saved, message } = await productsApi.promote(product.id, value);
+        product.promotion_price = saved.promotion_price;
+        promotionTotal.value += value === before ? 0 : value ? 1 : -1;
+        const note = promotionNote(product);
+        toast.add({
+            severity: note ? 'warn' : 'success',
+            summary: value ? 'En promoción' : 'Sin promoción',
+            detail: note ? `${message} ${note}` : message,
+            life: note ? 6000 : 4000,
+        });
+    } catch (e) {
+        product.on_promotion = before;
+        const ax = e as AxiosError<{ message?: string }>;
+        toast.add({ severity: 'error', summary: 'No se pudo cambiar', detail: ax.response?.data?.message, life: 4000 });
+    } finally {
+        promoting.value = null;
+    }
+}
+
 // --- Otras acciones -------------------------------------------------------
 function openLabels(ids: number[]): void {
     if (!ids.length) return;
@@ -242,6 +280,10 @@ onMounted(() => {
                 <p class="text-sm text-slate-500">
                     {{ total }} {{ words.many }} ·
                     <span class="font-medium text-emerald-600 dark:text-emerald-400"><i class="pi pi-globe text-xs"></i> {{ publishedTotal }} en la web</span>
+                    <template v-if="promotionTotal">
+                        ·
+                        <span class="font-medium text-rose-600 dark:text-rose-400"><i class="pi pi-percentage text-xs"></i> {{ promotionTotal }} en promoción</span>
+                    </template>
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
@@ -283,6 +325,7 @@ onMounted(() => {
             <p>
                 <strong>Para mostrar un {{ words.one }} en la web</strong> ponle foto, descripción y precio, y activa
                 <strong>«En la web»</strong> en la lista. Se ve al instante en sinexcusas.org.pe{{ isService ? ', agrupado por su categoría (Faciales, Corporales…)' : '' }}.
+                Activa <strong>«Promoción»</strong> para que además salga en <strong>Promociones</strong>; si al editarlo le pones precio de promoción, la web y el POS cobran ese precio.
             </p>
         </div>
 
@@ -366,7 +409,11 @@ onMounted(() => {
                 </Column>
                 <Column header="Precio" field="price" sortable>
                     <template #body="{ data }">
-                        <span class="font-semibold">{{ money(data.price) }}</span>
+                        <template v-if="data.promotion_price !== null">
+                            <span class="block text-xs text-slate-400 line-through">{{ money(data.price) }}</span>
+                            <span class="font-semibold text-rose-600 dark:text-rose-400">{{ money(data.promotion_price) }}</span>
+                        </template>
+                        <span v-else class="font-semibold">{{ money(data.price) }}</span>
                     </template>
                 </Column>
                 <Column v-if="!isService" header="Stock">
@@ -397,6 +444,19 @@ onMounted(() => {
                                 class="pi pi-exclamation-circle text-amber-500"
                                 v-tooltip.top="`Le falta ${missing(data).join(' y ')}`"
                             ></i>
+                        </div>
+                    </template>
+                </Column>
+                <Column header="Promoción" header-style="width:9rem">
+                    <template #body="{ data }">
+                        <div class="flex items-center gap-2">
+                            <ToggleSwitch
+                                :model-value="data.on_promotion"
+                                :disabled="!auth.can('products.edit') || promoting === data.id"
+                                :aria-label="`Poner ${data.name} en promoción`"
+                                @update:model-value="(value: boolean) => togglePromotion(data, value)"
+                            />
+                            <i v-if="promotionNote(data)" class="pi pi-exclamation-circle text-amber-500" v-tooltip.top="promotionNote(data)"></i>
                         </div>
                     </template>
                 </Column>

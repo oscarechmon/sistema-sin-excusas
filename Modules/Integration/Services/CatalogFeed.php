@@ -10,8 +10,9 @@ use Modules\Packages\Models\Package;
 
 /**
  * Todo lo que la web muestra de cada ítem del catálogo: nombre, categoría,
- * precio, stock y estado, y también lo de la web pública (si se publica,
- * imagen y fotos adicionales, descripción y, en un servicio, su duración).
+ * precio, stock y estado, y también lo de la web pública (si se publica, si
+ * está en promoción y a qué precio, imagen y fotos adicionales, descripción
+ * y, en un servicio, su duración).
  * La web no guarda nada de esto: lo lee de aquí.
  *
  * Incluye los eliminados (como inactivos) para que la web también los oculte.
@@ -59,6 +60,10 @@ class CatalogFeed
             'category_description' => $product->category?->description,
             'unit' => $product->unit?->name,
             'price' => (float) $product->price,
+            // En promoción: la web lo muestra en «Promociones». Si tiene precio
+            // de promoción, se cobra ese y el normal se muestra tachado.
+            'on_promotion' => (bool) $product->on_promotion,
+            'promotion_price' => $product->promotionPrice(),
             'cost' => (float) $product->cost,
             'track_stock' => $product->track_stock,
             'stock' => $product->track_stock ? (float) ($product->web_stock ?? 0) : null,

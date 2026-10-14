@@ -99,8 +99,9 @@ class SaleService
                     throw new BusinessException("Cantidad inválida para «{$product->name}».");
                 }
 
-                // El precio puede editarse en el POS según permiso; si no viene, usa el del producto.
-                $price = isset($row['price']) ? (float) $row['price'] : (float) $product->price;
+                // El precio puede editarse en el POS según permiso; si no viene, usa el que
+                // se cobra hoy (el de promoción, si está en promoción).
+                $price = isset($row['price']) ? (float) $row['price'] : $product->salePrice();
                 $lineDiscount = (float) ($row['discount'] ?? 0);
                 $lineTotal = round(($price * $qty) - $lineDiscount, 2);
 

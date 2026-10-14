@@ -101,6 +101,21 @@ class ProductService extends BaseService
     }
 
     /**
+     * Pone o quita de promoción, sin tocar nada más. Como al publicar, se
+     * avisa a la web, que lo muestra en «Promociones» con su precio.
+     */
+    public function promote(int|string $id, bool $onPromotion): Product
+    {
+        $this->guardPackage($id);
+
+        /** @var Product $product */
+        $product = Product::findOrFail($id);
+        $product->update(['on_promotion' => $onPromotion]);
+
+        return $this->products->findOrFail($product->id);
+    }
+
+    /**
      * Cambia la imagen del producto (borra la anterior). Se guarda sin pasar
      * por los eventos, como al crearlo: quien llama decide si avisar.
      */

@@ -26,7 +26,8 @@ import { useAuthStore } from '@/stores/auth';
  * Alta y edición de un producto o servicio. Arriba lo que hace falta (nombre,
  * categoría, precio, fotos, descripción y si se publica en la web); los datos
  * de inventario y códigos quedan en «Más datos», que casi nunca se tocan. A la
- * derecha se ve cómo quedará en la web mientras se escribe.
+ * derecha, si se publica y si está en promoción (con su precio), y cómo quedará
+ * en la web mientras se escribe.
  *
  * La foto principal es la de los listados y el POS; las adicionales solo se
  * ven en la ficha de la web, debajo de la principal.
@@ -85,6 +86,7 @@ const blank = (type: ProductType) => ({
     // null en lo que llegó de la web y nadie tocó aquí: no se cambia al guardar.
     // Lo nuevo nace sin publicar: un insumo no debe aparecer en la tienda.
     web_published: false as boolean | null,
+    on_promotion: false,
     duration_minutes: (type === 'service' ? 60 : null) as number | null,
 });
 
@@ -96,8 +98,15 @@ const title = computed(() => (isEdit.value ? `Editar ${noun.value}` : `Nuevo ${n
 const categoryName = computed(() => categories.value.find((c) => c.id === form.value.category_id)?.name ?? null);
 const money = (n: number | null): string => new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(n ?? 0);
 
+/** Lo que se cobrará en promoción (como en el servidor): solo si rebaja el precio. */
+const promoPrice = computed(() => {
+    const offer = form.value.offer_price ?? 0;
+    return form.value.on_promotion && offer > 0 && offer < (form.value.price ?? 0) ? offer : null;
+});
+const promoDiscount = computed(() => (promoPrice.value === null ? 0 : Math.round((1 - promoPrice.value / form.value.price) * 100)));
+
 /** Campos que viven en «Más datos»: si alguno trae error, se abre solo. */
-const MORE_FIELDS = ['code', 'barcode', 'sku', 'brand_id', 'unit_id', 'wholesale_price', 'offer_price', 'stock_max', 'is_active'];
+const MORE_FIELDS = ['code', 'barcode', 'sku', 'brand_id', 'unit_id', 'wholesale_price', 'stock_max', 'is_active'];
 
 /** Lo que conviene completar antes de publicar (no impide guardar). */
 const checklist = computed(() => [
@@ -153,6 +162,7 @@ watch(
                   stock_max: p.stock_max,
                   is_active: p.is_active,
                   web_published: p.web_published,
+                  on_promotion: p.on_promotion,
                   duration_minutes: p.duration_minutes,
               }
             : blank(props.kind);
@@ -441,7 +451,7 @@ const close = () => emit('update:visible', false);
 
                 <section>
                     <Button
-                        :label="showMore ? 'Ocultar más datos' : `Más datos (códigos${isService ? '' : ', marca, unidad'}, ofertas)`"
+                        :label="showMore ? 'Ocultar más datos' : `Más datos (códigos${isService ? '' : ', marca, unidad, precio mayorista'})`"
                         :icon="showMore ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
                         text
                         size="small"
@@ -452,10 +462,6 @@ const close = () => emit('update:visible', false);
                             <label class="mb-1 block text-sm font-medium">Código interno</label>
                             <InputText v-model="form.code" class="w-full" placeholder="Automático (PRD-000001)" :invalid="!!err('code')" />
                             <Message v-if="err('code')" severity="error" size="small" variant="simple">{{ err('code') }}</Message>
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium">Precio oferta</label>
-                            <InputNumber v-model="form.offer_price" mode="currency" currency="PEN" locale="es-PE" class="w-full" :min="0" />
                         </div>
                         <template v-if="!isService">
                             <div>
@@ -514,18 +520,56 @@ const close = () => emit('update:visible', false);
                     </p>
                 </div>
 
+                <div
+                    class="rounded-xl border p-4 transition"
+                    :class="form.on_promotion ? 'border-rose-300 bg-rose-50 dark:border-rose-500/40 dark:bg-rose-500/10' : 'border-[var(--surface-border)]'"
+                >
+                    <div class="flex items-center justify-between gap-3">
+                        <label for="pf-promo" class="font-semibold">En promoción</label>
+                        <ToggleSwitch v-model="form.on_promotion" input-id="pf-promo" />
+                    </div>
+                    <template v-if="form.on_promotion">
+                        <label class="mb-1 mt-3 block text-sm font-medium" for="pf-offer">Precio de promoción <span class="font-normal text-slate-400">(opcional)</span></label>
+                        <InputNumber
+                            input-id="pf-offer"
+                            v-model="form.offer_price"
+                            mode="currency"
+                            currency="PEN"
+                            locale="es-PE"
+                            class="w-full"
+                            :min="0"
+                            :invalid="!!err('offer_price')"
+                        />
+                        <Message v-if="err('offer_price')" severity="error" size="small" variant="simple">{{ err('offer_price') }}</Message>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            <template v-if="promoPrice !== null">
+                                {{ promoDiscount }}% menos. La web y el POS cobran {{ money(promoPrice) }} mientras esté en promoción.
+                            </template>
+                            <template v-else>Sin precio de promoción se vende al precio normal, con la etiqueta «Promoción».</template>
+                            <template v-if="!form.web_published"> Publícalo en la web para que salga en Promociones.</template>
+                        </p>
+                    </template>
+                    <p v-else class="mt-1 text-xs text-slate-500 dark:text-slate-400">Actívalo para que salga en sinexcusas.org.pe › Promociones.</p>
+                </div>
+
                 <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Así se verá</p>
                 <article class="overflow-hidden rounded-xl border border-[var(--surface-border)] bg-white text-slate-800 shadow-sm" :class="{ 'opacity-50': !form.web_published }">
-                    <div class="grid aspect-[4/3] place-items-center bg-[#FAF6EE]">
+                    <div class="relative grid aspect-[4/3] place-items-center bg-[#FAF6EE]">
                         <img v-if="preview" :src="preview" class="h-full w-full object-cover" alt="" />
                         <span v-else class="px-4 text-center text-sm text-[#9A8B6C]">{{ form.name || 'Sin foto' }}</span>
+                        <span v-if="form.on_promotion" class="absolute left-2 top-2 bg-[#14110C] px-2 py-1 text-[10px] uppercase leading-none tracking-[.16em] text-[#EBD3A2]">
+                            {{ promoDiscount ? `−${promoDiscount} %` : 'Promoción' }}
+                        </span>
                     </div>
                     <div class="space-y-1 p-3">
                         <p class="text-[10px] uppercase tracking-[.18em] text-[#B08D4B]">{{ categoryName ?? (isService ? 'Otros' : 'Productos') }}</p>
                         <p class="text-lg leading-tight">{{ form.name || `Nombre del ${noun}` }}</p>
                         <p class="line-clamp-3 text-xs text-[#7C7263]">{{ form.description || 'Aquí va la descripción.' }}</p>
                         <div class="flex items-center justify-between pt-1">
-                            <span class="font-semibold">{{ money(form.price) }}</span>
+                            <span>
+                                <span v-if="promoPrice !== null" class="mr-1.5 text-xs text-[#9A8B6C] line-through">{{ money(form.price) }}</span>
+                                <span class="font-semibold">{{ money(promoPrice ?? form.price) }}</span>
+                            </span>
                             <span v-if="isService && form.duration_minutes" class="text-xs text-[#7C7263]">{{ form.duration_minutes }} min</span>
                         </div>
                     </div>

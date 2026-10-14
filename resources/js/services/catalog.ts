@@ -30,7 +30,12 @@ export interface Product {
     cost: number;
     price: number;
     wholesale_price: number | null;
+    /** Precio de promoción (se cobra solo mientras esté `on_promotion`). */
     offer_price: number | null;
+    /** En promoción: la web lo muestra en «Promociones». */
+    on_promotion: boolean;
+    /** Lo que se cobra en promoción; null si no está en promoción o no rebaja el precio. */
+    promotion_price: number | null;
     profit_margin: number;
     current_stock: number;
     stock_min: number;
@@ -104,9 +109,9 @@ export interface Option {
 const unwrap = <T>(res: { data: { data: T } }): T => res.data.data;
 
 export const productsApi = {
-    /** Con `type`, trae además cuántos de ese tipo están publicados en la web. */
-    async list(params: TableQuery): Promise<Paginated<Product> & { web_published_total?: number }> {
-        return unwrap<Paginated<Product> & { web_published_total?: number }>(await http.get('/products', { params }));
+    /** Con `type`, trae además cuántos de ese tipo están publicados en la web y en promoción. */
+    async list(params: TableQuery): Promise<Paginated<Product> & { web_published_total?: number; promotion_total?: number }> {
+        return unwrap<Paginated<Product> & { web_published_total?: number; promotion_total?: number }>(await http.get('/products', { params }));
     },
     async get(id: number): Promise<Product> {
         return unwrap<Product>(await http.get(`/products/${id}`));
@@ -121,7 +126,12 @@ export const productsApi = {
             const fd = new FormData();
             const field = (v: unknown): string | Blob => (v instanceof File ? v : typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
             Object.entries(payload).forEach(([k, v]) => {
-                if (v === null || v === undefined) return;
+                if (v === undefined) return;
+                // Vacío llega como null (como en JSON): así se puede borrar un precio de promoción.
+                if (v === null) {
+                    fd.append(k, '');
+                    return;
+                }
                 if (Array.isArray(v)) v.forEach((item) => fd.append(`${k}[]`, field(item)));
                 else fd.append(k, field(v));
             });
@@ -137,6 +147,11 @@ export const productsApi = {
     /** Publica u oculta el ítem en la web, sin tocar nada más. */
     async publish(id: number, published: boolean): Promise<{ product: Product; message: string }> {
         const res = await http.post(`/products/${id}/web`, { web_published: published });
+        return { product: res.data.data as Product, message: res.data.message as string };
+    },
+    /** Pone o quita de promoción, sin tocar nada más. */
+    async promote(id: number, onPromotion: boolean): Promise<{ product: Product; message: string }> {
+        const res = await http.post(`/products/${id}/promotion`, { on_promotion: onPromotion });
         return { product: res.data.data as Product, message: res.data.message as string };
     },
     async remove(id: number): Promise<void> {

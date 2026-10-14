@@ -23,6 +23,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::get('{product}', 'show')->whereNumber('product')->middleware('permission:products.view');
         Route::get('{product}/label', 'label')->whereNumber('product')->middleware('permission:products.print');
         Route::post('{product}/web', 'publish')->whereNumber('product')->middleware('permission:products.edit');
+        Route::post('{product}/promotion', 'promote')->whereNumber('product')->middleware('permission:products.edit');
         Route::match(['put', 'patch', 'post'], '{product}', 'update')->whereNumber('product')->middleware('permission:products.edit');
         Route::delete('{product}', 'destroy')->whereNumber('product')->middleware('permission:products.delete');
     });

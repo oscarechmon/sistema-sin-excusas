@@ -50,6 +50,8 @@ class Product extends Model implements Auditable
         'stock_min', 'stock_max', 'track_stock', 'has_expiry', 'is_active',
         // Lo que muestra la web pública (con la imagen y la descripción).
         'web_published', 'duration_minutes',
+        // En promoción: sale en «Promociones» de la web y cobra `offer_price` si lo tiene.
+        'on_promotion',
     ];
 
     protected $casts = [
@@ -63,6 +65,7 @@ class Product extends Model implements Auditable
         'has_expiry' => 'boolean',
         'is_active' => 'boolean',
         'web_published' => 'boolean',
+        'on_promotion' => 'boolean',
         'duration_minutes' => 'integer',
     ];
 
@@ -70,6 +73,7 @@ class Product extends Model implements Auditable
 
     protected $attributes = [
         'type' => self::TYPE_PRODUCT,
+        'on_promotion' => false,
     ];
 
     /** Solo un bien físico controla stock, venga de donde venga el cambio. */
@@ -90,6 +94,23 @@ class Product extends Model implements Auditable
     public function isPackage(): bool
     {
         return $this->type === self::TYPE_PACKAGE;
+    }
+
+    /**
+     * Precio de promoción vigente: el de oferta, solo si está en promoción y
+     * de verdad rebaja el precio. Si no, null (se cobra el precio normal).
+     */
+    public function promotionPrice(): ?float
+    {
+        $offer = $this->offer_price !== null ? (float) $this->offer_price : null;
+
+        return $this->on_promotion && $offer !== null && $offer > 0 && $offer < (float) $this->price ? $offer : null;
+    }
+
+    /** Lo que se cobra hoy: el de promoción si lo hay; si no, el normal. */
+    public function salePrice(): float
+    {
+        return $this->promotionPrice() ?? (float) $this->price;
     }
 
     // --- Relaciones -------------------------------------------------------

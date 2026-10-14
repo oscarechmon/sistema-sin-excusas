@@ -6,6 +6,7 @@ namespace Modules\Catalog\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 use Modules\Catalog\Models\Product;
 use Modules\Catalog\Models\ProductImage;
 
@@ -39,6 +40,7 @@ class StoreProductRequest extends FormRequest
             'has_expiry' => ['boolean'],
             'is_active' => ['boolean'],
             'web_published' => ['nullable', 'boolean'],
+            'on_promotion' => ['boolean'],
             'duration_minutes' => ['nullable', 'integer', 'min:5', 'max:600'],
             'image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:4096'],
             // Fotos adicionales de la ficha web (la principal es `image`).
@@ -68,6 +70,19 @@ class StoreProductRequest extends FormRequest
         ];
     }
 
+    /** En promoción, el precio de promoción tiene que rebajar el precio normal. */
+    public function after(): array
+    {
+        return [
+            function (Validator $validator): void {
+                $offer = (float) $this->input('offer_price');
+                if ($this->boolean('on_promotion') && $offer > 0 && is_numeric($this->input('price')) && $offer >= (float) $this->input('price')) {
+                    $validator->errors()->add('offer_price', 'El precio de promoción debe ser menor que el precio normal.');
+                }
+            },
+        ];
+    }
+
     protected function prepareForValidation(): void
     {
         // Normaliza los booleanos que llegan como "true"/"1"/on desde el formulario.
@@ -76,6 +91,7 @@ class StoreProductRequest extends FormRequest
             'track_stock' => $this->boolean('track_stock', true),
             'has_expiry' => $this->boolean('has_expiry'),
             'is_active' => $this->boolean('is_active', true),
+            'on_promotion' => $this->boolean('on_promotion'),
         ]);
     }
 }

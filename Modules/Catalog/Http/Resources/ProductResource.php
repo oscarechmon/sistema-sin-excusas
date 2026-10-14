@@ -40,6 +40,9 @@ class ProductResource extends JsonResource
             'price' => (float) $this->price,
             'wholesale_price' => $this->wholesale_price !== null ? (float) $this->wholesale_price : null,
             'offer_price' => $this->offer_price !== null ? (float) $this->offer_price : null,
+            // En promoción, y el precio que se cobra mientras dure (null: el normal).
+            'on_promotion' => (bool) $this->on_promotion,
+            'promotion_price' => $this->resource->promotionPrice(),
             'profit_margin' => $this->profit_margin,
             'current_stock' => $this->current_stock,
             'stock_min' => (float) $this->stock_min,

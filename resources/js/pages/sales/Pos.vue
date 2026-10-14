@@ -104,7 +104,8 @@ function addToCart(p: Product): void {
     if (existing) {
         existing.quantity += 1;
     } else {
-        cart.value.push({ product_id: p.id, type: p.type, code: p.code, name: p.name, price: p.price, quantity: 1, stock: p.current_stock, employee_id: null });
+        // En promoción se cobra su precio de promoción (se puede editar igual).
+        cart.value.push({ product_id: p.id, type: p.type, code: p.code, name: p.name, price: p.promotion_price ?? p.price, quantity: 1, stock: p.current_stock, employee_id: null });
     }
     query.value = '';
     results.value = [];
@@ -200,7 +201,12 @@ onMounted(async () => {
                     </span>
                     <span class="line-clamp-2 text-sm font-medium">{{ p.name }}</span>
                     <span class="mt-1 text-xs text-slate-400">{{ typeLabel(p) }}</span>
-                    <span class="mt-1 font-bold text-brand-600">{{ money(p.price) }}</span>
+                    <span v-if="p.promotion_price !== null" class="mt-1">
+                        <span class="mr-1 text-xs text-slate-400 line-through">{{ money(p.price) }}</span>
+                        <span class="font-bold text-rose-600 dark:text-rose-400">{{ money(p.promotion_price) }}</span>
+                        <Tag value="Promo" severity="danger" class="ml-1 !px-1.5 !py-0 !text-[10px]" />
+                    </span>
+                    <span v-else class="mt-1 font-bold text-brand-600">{{ money(p.price) }}</span>
                 </button>
                 <div v-if="!results.length" class="col-span-full grid place-items-center py-16 text-center text-sm text-slate-400">
                     <div>
