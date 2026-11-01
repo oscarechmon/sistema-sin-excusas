@@ -16,17 +16,19 @@ import IconField from 'primevue/iconfield';
 import InputIcon from 'primevue/inputicon';
 import Message from 'primevue/message';
 import { AxiosError } from 'axios';
-import { attendancesApi, appointmentsApi, serviceSuppliesApi, isoDate, type Attendance } from '@/services/agenda';
+import { attendancesApi, appointmentsApi, serviceSuppliesApi, isoDate, visitLabel, type Attendance } from '@/services/agenda';
 import { customerPackagesApi, type CustomerPackage } from '@/services/packages';
 import { employeesApi, type Employee } from '@/services/staff';
 import { customersApi, type Customer } from '@/services/contacts';
 import { productsApi, type Product } from '@/services/catalog';
 import { useAuthStore } from '@/stores/auth';
+import { useTodayAppointmentsStore } from '@/stores/todayAppointments';
 
 const toast = useToast();
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
+const today = useTodayAppointmentsStore();
 const money = (n: number): string => new Intl.NumberFormat('es-PE', { style: 'currency', currency: 'PEN' }).format(n);
 const dayLabel = (s: string): string => new Date(`${s}T00:00:00`).toLocaleDateString('es-PE');
 
@@ -124,7 +126,7 @@ async function openCreate(appointmentId?: number): Promise<void> {
         form.value.appointment_id = a.id;
         form.value.customer_id = a.customer_id;
         form.value.service_id = a.service_id;
-        appointmentLabel.value = `Cita del ${dayLabel(a.appointment_date)} a las ${a.start_time}`;
+        appointmentLabel.value = [`Cita del ${dayLabel(a.appointment_date)} a las ${a.start_time}`, a.title, visitLabel(a.visit_number)].filter(Boolean).join(' · ');
         await onServiceChange();
         form.value.employee_id = a.employee_id;
     } else {
@@ -155,6 +157,8 @@ async function submit(): Promise<void> {
         const extra = created.session_number ? ` · sesión ${created.session_number} del paquete` : '';
         toast.add({ severity: 'success', summary: 'Atención registrada', detail: `${created.service}${extra}`, life: 3500 });
         if (route.query.appointment) router.replace({ name: 'attendances' });
+        // La cita quedó atendida: la campana deja de contarla.
+        if (created.appointment_id && auth.can('appointments.view')) today.refresh();
         load();
     } catch (e) {
         const ax = e as AxiosError<{ errors?: Record<string, string[]>; message?: string }>;

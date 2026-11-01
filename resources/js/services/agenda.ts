@@ -8,8 +8,11 @@ export interface Appointment {
     appointment_date: string;
     start_time: string;
     end_time: string;
+    title: string | null;
     status: AppointmentStatus;
     notes: string | null;
+    /** Qué visita del cliente es (días distintos); null si la cita ya no ocupa el horario. */
+    visit_number: number | null;
     customer_id: number;
     service_id: number;
     employee_id: number;
@@ -25,6 +28,7 @@ export interface AppointmentPayload {
     appointment_date: string;
     start_time: string;
     end_time: string;
+    title?: string | null;
     status?: AppointmentStatus;
     notes?: string | null;
 }
@@ -38,6 +42,11 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, { label: string; seve
     no_show: { label: 'No se presentó', severity: 'danger' },
 };
 
+/** «Primera visita», «Visita N.º 4»… */
+export function visitLabel(n: number | null | undefined): string {
+    if (!n) return '';
+    return n === 1 ? 'Primera visita' : `Visita N.º ${n}`;
+}
 export interface Attendance {
     id: number;
     attended_at: string;
@@ -91,6 +100,10 @@ export const appointmentsApi = {
     async save(payload: AppointmentPayload, id?: number): Promise<Appointment> {
         const res = id ? await http.put(`/appointments/${id}`, payload) : await http.post('/appointments', payload);
         return unwrap<Appointment>(res);
+    },
+    /** Qué número de visita sería una cita nueva del cliente ese día. */
+    async visitNumber(customerId: number, date: string): Promise<number> {
+        return unwrap<{ visit_number: number }>(await http.get('/appointments/visit-number', { params: { customer_id: customerId, date } })).visit_number;
     },
     async status(id: number, status: AppointmentStatus): Promise<Appointment> {
         return unwrap<Appointment>(await http.post(`/appointments/${id}/status`, { status }));

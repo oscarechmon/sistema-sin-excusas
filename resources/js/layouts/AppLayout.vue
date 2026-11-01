@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Menu from 'primevue/menu';
 import AppSidebar from './AppSidebar.vue';
+import AppointmentBell from '@/components/agenda/AppointmentBell.vue';
 import { useAuthStore } from '@/stores/auth';
 import { useUiStore } from '@/stores/ui';
 
@@ -90,14 +91,8 @@ const initials = computed(() =>
                         <i class="pi" :class="ui.dark ? 'pi-sun' : 'pi-moon'"></i>
                     </button>
 
-                    <!-- Notificaciones (placeholder) -->
-                    <button
-                        type="button"
-                        class="relative grid h-9 w-9 place-items-center rounded-lg hover:bg-brand-50 dark:hover:bg-white/5"
-                    >
-                        <i class="pi pi-bell"></i>
-                        <span class="absolute right-2 top-2 h-2 w-2 rounded-full bg-rose-500"></span>
-                    </button>
+                    <!-- Citas de hoy y recordatorios -->
+                    <AppointmentBell v-if="auth.can('appointments.view')" />
 
                     <!-- Usuario -->
                     <button

@@ -14,16 +14,18 @@ import Dialog from 'primevue/dialog';
 import Tag from 'primevue/tag';
 import Message from 'primevue/message';
 import { AxiosError } from 'axios';
-import { appointmentsApi, APPOINTMENT_STATUS, isoDate, type Appointment, type AppointmentPayload, type AppointmentStatus } from '@/services/agenda';
+import { appointmentsApi, APPOINTMENT_STATUS, isoDate, visitLabel, type Appointment, type AppointmentPayload, type AppointmentStatus } from '@/services/agenda';
 import { employeesApi, type Employee } from '@/services/staff';
 import { customersApi, type Customer } from '@/services/contacts';
 import { productsApi, type Product } from '@/services/catalog';
 import { useAuthStore } from '@/stores/auth';
+import { useTodayAppointmentsStore } from '@/stores/todayAppointments';
 
 const toast = useToast();
 const confirm = useConfirm();
 const router = useRouter();
 const auth = useAuthStore();
+const today = useTodayAppointmentsStore();
 
 const day = ref(new Date());
 const employeeId = ref<number | null>(null);
@@ -45,6 +47,8 @@ async function load(): Promise<void> {
     } finally {
         loading.value = false;
     }
+    // La campana se pone al día sin esperar a su ciclo.
+    today.refresh();
 }
 function shift(days: number): void {
     const d = new Date(day.value);
@@ -58,8 +62,26 @@ const dialog = ref(false);
 const saving = ref(false);
 const errors = ref<Record<string, string[]>>({});
 const editingId = ref<number | null>(null);
-const form = ref<AppointmentPayload & { date: Date }>({ customer_id: null, service_id: null, employee_id: null, appointment_date: '', start_time: '09:00', end_time: '10:00', notes: '', date: new Date() });
+const form = ref<AppointmentPayload & { date: Date }>({ customer_id: null, service_id: null, employee_id: null, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date() });
 const formEmployees = ref<Employee[]>([]);
+
+/** Qué visita del cliente será (al crear) o es (al editar). */
+const visitNumber = ref<number | null>(null);
+watch(
+    () => [dialog.value, form.value.customer_id, form.value.date ? isoDate(form.value.date) : ''] as const,
+    async ([open, customerId, date]) => {
+        if (!open || editingId.value) return;
+        visitNumber.value = null;
+        if (!customerId || !date) return;
+        try {
+            const n = await appointmentsApi.visitNumber(customerId, date);
+            // Si mientras tanto cambió el cliente o la fecha, esta respuesta ya no vale.
+            if (customerId === form.value.customer_id && form.value.date && date === isoDate(form.value.date)) visitNumber.value = n;
+        } catch {
+            // Es solo informativo: sin el dato, la cita se agenda igual.
+        }
+    },
+);
 
 async function loadOptions(): Promise<void> {
     if (!customers.value.length) customers.value = await customersApi.options();
@@ -74,7 +96,7 @@ async function openCreate(): Promise<void> {
     await loadOptions();
     editingId.value = null;
     errors.value = {};
-    form.value = { customer_id: null, service_id: null, employee_id: employeeId.value, appointment_date: '', start_time: '09:00', end_time: '10:00', notes: '', date: new Date(day.value) };
+    form.value = { customer_id: null, service_id: null, employee_id: employeeId.value, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date(day.value) };
     await refreshFormEmployees();
     dialog.value = true;
 }
@@ -84,8 +106,9 @@ async function openEdit(a: Appointment): Promise<void> {
     errors.value = {};
     form.value = {
         customer_id: a.customer_id, service_id: a.service_id, employee_id: a.employee_id, appointment_date: a.appointment_date,
-        start_time: a.start_time, end_time: a.end_time, notes: a.notes ?? '', status: a.status, date: new Date(`${a.appointment_date}T00:00:00`),
+        start_time: a.start_time, end_time: a.end_time, title: a.title ?? '', notes: a.notes ?? '', status: a.status, date: new Date(`${a.appointment_date}T00:00:00`),
     };
+    visitNumber.value = a.visit_number;
     await refreshFormEmployees();
     dialog.value = true;
 }
@@ -165,13 +188,29 @@ onMounted(async () => {
                 <Column header="Hora" header-style="width:8rem">
                     <template #body="{ data }"><span class="font-semibold">{{ data.start_time }}</span><span class="text-slate-400"> – {{ data.end_time }}</span></template>
                 </Column>
+                <Column header="Cita">
+                    <template #body="{ data }">
+                        <p class="font-semibold">
+                            {{ data.title || data.service?.name }}
+                            <i v-if="data.notes" class="pi pi-comment ml-1 text-xs text-slate-400" v-tooltip.top="data.notes"></i>
+                        </p>
+                        <p v-if="data.title" class="text-xs text-slate-400">{{ data.service?.name }}</p>
+                    </template>
+                </Column>
                 <Column header="Cliente">
                     <template #body="{ data }">
                         <p class="font-medium">{{ data.customer?.name }}</p>
-                        <p class="text-xs text-slate-400">{{ data.customer?.whatsapp ?? data.customer?.phone ?? '' }}</p>
+                        <p class="text-xs text-slate-400">
+                            <span
+                                v-if="data.visit_number"
+                                class="font-medium"
+                                :class="data.visit_number === 1 ? 'text-emerald-600 dark:text-emerald-400' : 'text-brand-600 dark:text-brand-300'"
+                            >{{ visitLabel(data.visit_number) }}</span>
+                            <template v-if="data.visit_number && (data.customer?.whatsapp ?? data.customer?.phone)"> · </template>
+                            {{ data.customer?.whatsapp ?? data.customer?.phone ?? '' }}
+                        </p>
                     </template>
                 </Column>
-                <Column header="Servicio"><template #body="{ data }">{{ data.service?.name }}</template></Column>
                 <Column header="Especialista"><template #body="{ data }">{{ data.employee?.name }}</template></Column>
                 <Column header="Estado">
                     <template #body="{ data }"><Tag :value="APPOINTMENT_STATUS[data.status as AppointmentStatus].label" :severity="APPOINTMENT_STATUS[data.status as AppointmentStatus].severity" /></template>
@@ -199,6 +238,14 @@ onMounted(async () => {
                     <label class="mb-1 block text-sm font-medium">Cliente *</label>
                     <Select v-model="form.customer_id" :options="customers" option-label="name" option-value="id" filter class="w-full" placeholder="Buscar cliente" :invalid="!!errors.customer_id" />
                     <Message v-if="errors.customer_id" severity="error" size="small" variant="simple">{{ errors.customer_id[0] }}</Message>
+                    <p v-else-if="visitNumber" class="mt-1 text-xs" :class="visitNumber === 1 ? 'text-emerald-600 dark:text-emerald-400' : 'text-brand-600 dark:text-brand-300'">
+                        <i class="pi pi-history mr-1 text-[11px]"></i>{{ editingId ? visitLabel(visitNumber) : visitNumber === 1 ? 'Será su primera visita' : `Será su visita N.º ${visitNumber}` }}
+                    </p>
+                </div>
+                <div class="md:col-span-2">
+                    <label class="mb-1 block text-sm font-medium">Título</label>
+                    <InputText v-model="form.title" maxlength="120" class="w-full" placeholder="Ej.: Evaluación inicial, Control, Retoque…" :invalid="!!errors.title" />
+                    <Message v-if="errors.title" severity="error" size="small" variant="simple">{{ errors.title[0] }}</Message>
                 </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium">Servicio *</label>
