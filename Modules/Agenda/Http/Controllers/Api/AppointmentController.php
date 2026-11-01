@@ -27,6 +27,17 @@ class AppointmentController extends ApiController
         return $this->ok(AppointmentResource::collection($this->service->list($request->all()))->response()->getData(true));
     }
 
+    /** Qué número de visita sería una cita nueva del cliente en esa fecha (formulario). */
+    public function visitNumber(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'customer_id' => ['required', 'integer', 'exists:customers,id'],
+            'date' => ['required', 'date_format:Y-m-d'],
+        ]);
+
+        return $this->ok(['visit_number' => $this->service->nextVisit((int) $data['customer_id'], $data['date'])]);
+    }
+
     public function store(AppointmentRequest $request): JsonResponse
     {
         return $this->created(new AppointmentResource($this->service->create($request->validated())), 'Cita registrada.');

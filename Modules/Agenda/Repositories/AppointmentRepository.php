@@ -11,7 +11,7 @@ use Modules\Agenda\Models\Appointment;
 
 class AppointmentRepository extends BaseRepository
 {
-    protected array $searchable = ['notes'];
+    protected array $searchable = ['title', 'notes'];
 
     protected array $filterable = ['customer_id', 'employee_id', 'service_id', 'status'];
 
@@ -43,7 +43,8 @@ class AppointmentRepository extends BaseRepository
         if (! empty($filters['search'])) {
             $term = trim((string) $filters['search']);
             $query->where(fn (Builder $q) => $q
-                ->where('notes', 'like', "%{$term}%")
+                ->where('title', 'like', "%{$term}%")
+                ->orWhere('notes', 'like', "%{$term}%")
                 ->orWhereHas('customer', fn (Builder $c) => $c->where('name', 'like', "%{$term}%")->orWhere('code', 'like', "%{$term}%")));
             unset($filters['search']);
         }

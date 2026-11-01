@@ -17,8 +17,11 @@ class AppointmentResource extends JsonResource
             'appointment_date' => $this->appointment_date?->toDateString(),
             'start_time' => substr((string) $this->start_time, 0, 5),
             'end_time' => substr((string) $this->end_time, 0, 5),
+            'title' => $this->title,
             'status' => $this->status,
             'notes' => $this->notes,
+            // Lo anota VisitCounter en los listados y en el detalle.
+            'visit_number' => $this->visit_number,
             'customer_id' => $this->customer_id,
             'service_id' => $this->service_id,
             'employee_id' => $this->employee_id,

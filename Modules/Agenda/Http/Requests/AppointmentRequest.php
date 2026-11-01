@@ -28,6 +28,7 @@ class AppointmentRequest extends FormRequest
             'appointment_date' => array_filter(['required', 'date', $creating ? 'after_or_equal:today' : null]),
             'start_time' => ['required', 'date_format:H:i'],
             'end_time' => ['required', 'date_format:H:i', 'after:start_time'],
+            'title' => ['nullable', 'string', 'max:120'],
             'status' => ['nullable', Rule::in(Appointment::STATUSES)],
             'notes' => ['nullable', 'string', 'max:1000'],
         ];
@@ -43,6 +44,10 @@ class AppointmentRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
+        if (is_string($this->input('title'))) {
+            $this->merge(['title' => trim($this->input('title')) ?: null]);
+        }
+
         // Las horas pueden venir con segundos (HH:MM:SS) desde la edición.
         foreach (['start_time', 'end_time'] as $field) {
             if (is_string($this->input($field))) {

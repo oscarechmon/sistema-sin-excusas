@@ -196,6 +196,39 @@ class SpaOperationsTest extends TestCase
         $book('10:00', '10:45')->assertCreated();
     }
 
+    public function test_la_cita_lleva_titulo_y_el_numero_de_visita_del_cliente(): void
+    {
+        $service = $this->service();
+        $employee = $this->employee();
+        $customer = Customer::factory()->create();
+        $book = fn (int $inDays, string $from, string $to, array $extra = []) => $this->postJson('/api/v1/appointments', [
+            'customer_id' => $customer->id, 'service_id' => $service->id, 'employee_id' => $employee->id,
+            'appointment_date' => today()->addDays($inDays)->toDateString(), 'start_time' => $from, 'end_time' => $to,
+        ] + $extra)->assertCreated();
+
+        // Vino una vez sin cita (o llegó así desde la web): esa ya es su visita 1.
+        Attendance::create([
+            'customer_id' => $customer->id, 'service_id' => $service->id, 'employee_id' => $employee->id,
+            'attended_at' => today()->subDays(10)->toDateString(),
+        ]);
+
+        $book(1, '10:00', '11:00', ['title' => '  Evaluación inicial  '])
+            ->assertJsonPath('data.title', 'Evaluación inicial')
+            ->assertJsonPath('data.visit_number', 2);
+        $book(1, '15:00', '16:00')->assertJsonPath('data.visit_number', 2); // mismo día, misma visita
+        $cancelled = $book(3, '10:00', '11:00')->json('data.id');
+        $this->postJson("/api/v1/appointments/{$cancelled}/status", ['status' => 'cancelled'])
+            ->assertOk()->assertJsonPath('data.visit_number', null);
+        $book(5, '10:00', '11:00')->assertJsonPath('data.visit_number', 3); // la cancelada no cuenta
+
+        $this->getJson('/api/v1/appointments?all=1&customer_id='.$customer->id)
+            ->assertOk()
+            ->assertJsonPath('data.0.visit_number', 2)
+            ->assertJsonPath('data.3.visit_number', 3);
+        $this->getJson('/api/v1/appointments/visit-number?customer_id='.$customer->id.'&date='.today()->addDays(7)->toDateString())
+            ->assertOk()->assertJsonPath('data.visit_number', 4);
+    }
+
     // -------------------------------------------------------------- Atenciones
 
     public function test_una_atencion_consume_sesion_descuenta_insumos_cierra_la_cita_y_genera_comision(): void

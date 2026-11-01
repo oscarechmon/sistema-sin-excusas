@@ -6,6 +6,8 @@ namespace Modules\Agenda\Services;
 
 use App\Core\Exceptions\BusinessException;
 use App\Core\Services\BaseService;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Modules\Agenda\Models\Appointment;
 use Modules\Agenda\Repositories\AppointmentRepository;
@@ -13,12 +15,40 @@ use Modules\Agenda\Repositories\AppointmentRepository;
 /**
  * Agenda del centro. Un especialista no puede tener dos citas que se crucen
  * (las canceladas, pospuestas o sin asistencia ya no ocupan el horario).
+ * Cada cita que se lee lleva el número de visita del cliente.
  */
 class AppointmentService extends BaseService
 {
-    public function __construct(AppointmentRepository $repository)
+    public function __construct(AppointmentRepository $repository, private readonly VisitCounter $visits)
     {
         parent::__construct($repository);
+    }
+
+    public function list(array $filters = []): LengthAwarePaginator
+    {
+        $page = parent::list($filters);
+        $this->visits->annotate($page->getCollection());
+
+        return $page;
+    }
+
+    public function all(array $filters = []): Collection
+    {
+        $appointments = parent::all($filters);
+        $this->visits->annotate($appointments);
+
+        return $appointments;
+    }
+
+    public function find(int|string $id, array $with = []): Model
+    {
+        return $this->withVisit(parent::find($id, $with));
+    }
+
+    /** Número de visita que tendría una cita nueva del cliente en esa fecha. */
+    public function nextVisit(int $customerId, string $date): int
+    {
+        return $this->visits->next($customerId, $date);
     }
 
     public function create(array $data): Model
@@ -28,7 +58,7 @@ class AppointmentService extends BaseService
         $data['created_by'] = auth()->id();
         $this->assertFree($data);
 
-        return parent::create($data)->load(['customer', 'service', 'employee']);
+        return $this->withVisit(parent::create($data)->load(['customer', 'service', 'employee']));
     }
 
     public function update(int|string $id, array $data): Model
@@ -38,7 +68,7 @@ class AppointmentService extends BaseService
         $current = $this->repository->findOrFail($id);
         $this->assertFree($data + $current->only(['employee_id', 'appointment_date', 'start_time', 'end_time', 'status']), (int) $id);
 
-        return parent::update($id, $data)->load(['customer', 'service', 'employee']);
+        return $this->withVisit(parent::update($id, $data)->load(['customer', 'service', 'employee']));
     }
 
     public function changeStatus(int $id, string $status): Appointment
@@ -52,7 +82,20 @@ class AppointmentService extends BaseService
 
         $appointment->update(['status' => $status]);
 
-        return $appointment->load(['customer', 'service', 'employee']);
+        return $this->withVisit($appointment->load(['customer', 'service', 'employee']));
+    }
+
+    /**
+     * @template T of Model
+     *
+     * @param  T  $appointment
+     * @return T
+     */
+    private function withVisit(Model $appointment): Model
+    {
+        $this->visits->annotate([$appointment]);
+
+        return $appointment;
     }
 
     /**
