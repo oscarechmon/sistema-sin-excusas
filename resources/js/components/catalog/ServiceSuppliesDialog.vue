@@ -57,14 +57,16 @@ async function save(): Promise<void> {
 </script>
 
 <template>
-    <Dialog v-model:visible="visible" modal :header="`Insumos de «${service?.name ?? ''}»`" :style="{ width: '520px' }">
+    <Dialog v-model:visible="visible" modal :header="`Insumos de «${service?.name ?? ''}»`" :style="{ width: '520px' }" :breakpoints="{ '560px': '96vw' }">
         <p class="mb-3 text-sm text-slate-500">Se proponen al registrar cada atención de este servicio y salen del stock del almacén por defecto.</p>
         <div v-if="loading" class="py-6 text-center text-slate-400"><i class="pi pi-spin pi-spinner"></i></div>
         <template v-else>
             <div v-for="(l, i) in lines" :key="i" class="mb-2 flex items-center gap-2">
-                <Select v-model="l.supply_id" :options="supplies" option-label="name" option-value="id" filter class="flex-1" placeholder="Insumo" />
-                <InputNumber v-model="l.default_quantity" :min="0.01" :max-fraction-digits="2" class="w-28" input-class="text-right" />
-                <Button icon="pi pi-times" text rounded size="small" severity="danger" @click="lines.splice(i, 1)" />
+                <Select v-model="l.supply_id" :options="supplies" option-label="name" option-value="id" filter class="min-w-0 flex-1" placeholder="Insumo" />
+                <div class="w-24 shrink-0">
+                    <InputNumber v-model="l.default_quantity" :min="0.01" :max-fraction-digits="2" fluid input-class="text-right" placeholder="Cant." />
+                </div>
+                <Button icon="pi pi-times" text rounded size="small" severity="danger" class="shrink-0" @click="lines.splice(i, 1)" />
             </div>
             <button type="button" class="text-sm text-brand-600 hover:underline" @click="lines.push({ supply_id: null, default_quantity: 1 })">
                 <i class="pi pi-plus text-xs"></i> Agregar insumo

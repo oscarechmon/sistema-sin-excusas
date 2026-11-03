@@ -245,7 +245,7 @@ onMounted(async () => {
         </div>
 
         <!-- Registro -->
-        <Dialog v-model:visible="dialog" modal header="Registrar atención" :style="{ width: '720px' }">
+        <Dialog v-model:visible="dialog" modal header="Registrar atención" :style="{ width: '720px' }" :breakpoints="{ '760px': '96vw' }">
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <Message v-if="appointmentLabel" class="md:col-span-2" severity="info" size="small">{{ appointmentLabel }}: al guardar queda como atendida.</Message>
                 <div>
@@ -290,9 +290,11 @@ onMounted(async () => {
                                 </div>
                                 <p v-if="!line.supplies.length" class="text-xs text-slate-400">Sin insumos. Los que el servicio usa normalmente se proponen solos (se configuran en Centro › Servicios, botón de insumos).</p>
                                 <div v-for="(s, j) in line.supplies" :key="j" class="mb-2 flex items-center gap-2">
-                                    <Select v-model="s.product_id" :options="supplies" option-label="name" option-value="id" filter class="flex-1" placeholder="Insumo" />
-                                    <InputNumber v-model="s.quantity" :min="0.01" :max-fraction-digits="2" class="w-28" input-class="text-right" />
-                                    <Button icon="pi pi-times" text rounded size="small" severity="danger" @click="removeSupply(line, j)" />
+                                    <Select v-model="s.product_id" :options="supplies" option-label="name" option-value="id" filter class="min-w-0 flex-1" placeholder="Insumo" />
+                                    <div class="w-24 shrink-0">
+                                        <InputNumber v-model="s.quantity" :min="0.01" :max-fraction-digits="2" fluid input-class="text-right" placeholder="Cant." v-tooltip.top="'Cantidad'" />
+                                    </div>
+                                    <Button icon="pi pi-times" text rounded size="small" severity="danger" class="shrink-0" v-tooltip.top="'Quitar insumo'" @click="removeSupply(line, j)" />
                                 </div>
                                 <Message v-if="lineError(i, 'supplies')" severity="error" size="small" variant="simple">{{ lineError(i, 'supplies') }}</Message>
                             </div>
@@ -316,7 +318,7 @@ onMounted(async () => {
         </Dialog>
 
         <!-- Detalle -->
-        <Dialog :visible="!!detail" modal header="Atención" :style="{ width: '520px' }" @update:visible="detail = null">
+        <Dialog :visible="!!detail" modal header="Atención" :style="{ width: '520px' }" :breakpoints="{ '560px': '96vw' }" @update:visible="detail = null">
             <div v-if="detail" class="space-y-3 text-sm">
                 <div class="grid grid-cols-2 gap-2">
                     <div><p class="text-xs text-slate-400">Cliente</p><p class="font-medium">{{ detail.customer?.name }}</p></div>
