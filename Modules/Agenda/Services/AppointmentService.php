@@ -9,12 +9,14 @@ use App\Core\Services\BaseService;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Modules\Agenda\Models\Appointment;
 use Modules\Agenda\Repositories\AppointmentRepository;
 
 /**
  * Agenda del centro. Un especialista no puede tener dos citas que se crucen
- * (las canceladas, pospuestas o sin asistencia ya no ocupan el horario).
+ * (las canceladas, reprogramadas o sin asistencia ya no ocupan el horario).
  * Cada cita que se lee lleva el número de visita del cliente.
  */
 class AppointmentService extends BaseService
@@ -66,6 +68,13 @@ class AppointmentService extends BaseService
         $data = $this->normalizeTimes($data);
         /** @var Appointment $current */
         $current = $this->repository->findOrFail($id);
+
+        // Ya atendida: horario, servicio y especialista quedaron en la atención
+        // (comisión, sesión, insumos). Solo se corrigen el título y las notas.
+        if ($current->status === Appointment::STATUS_ATTENDED) {
+            return $this->withVisit(parent::update($id, Arr::only($data, ['title', 'notes']))->load(['customer', 'service', 'employee']));
+        }
+
         $this->assertFree($data + $current->only(['employee_id', 'appointment_date', 'start_time', 'end_time', 'status']), (int) $id);
 
         return $this->withVisit(parent::update($id, $data)->load(['customer', 'service', 'employee']));
@@ -83,6 +92,42 @@ class AppointmentService extends BaseService
         $appointment->update(['status' => $status]);
 
         return $this->withVisit($appointment->load(['customer', 'service', 'employee']));
+    }
+
+    /**
+     * El cliente avisó y pasa a otra fecha: la cita original queda como
+     * «Reprogramó» (libera su horario) y se crea la nueva, enlazada a ella.
+     *
+     * @param  array{appointment_date: string, start_time: string, end_time: string, employee_id?: int|null}  $data
+     */
+    public function reschedule(int $id, array $data): Appointment
+    {
+        return DB::transaction(function () use ($id, $data): Appointment {
+            /** @var Appointment $original */
+            $original = Appointment::with('rescheduledTo:id,rescheduled_from_id')->lockForUpdate()->findOrFail($id);
+
+            if (! in_array($original->status, Appointment::RESCHEDULABLE_STATUSES, true) || $original->rescheduledTo) {
+                throw new BusinessException('Esta cita ya no se puede reprogramar.');
+            }
+
+            // Primero se libera su horario, así puede moverse a una hora que se cruce con la de antes.
+            $original->update(['status' => Appointment::STATUS_POSTPONED]);
+
+            /** @var Appointment $new */
+            $new = $this->create([
+                'customer_id' => $original->customer_id,
+                'service_id' => $original->service_id,
+                'employee_id' => $data['employee_id'] ?? $original->employee_id,
+                'appointment_date' => $data['appointment_date'],
+                'start_time' => $data['start_time'],
+                'end_time' => $data['end_time'],
+                'title' => $original->title,
+                'notes' => $original->notes,
+                'rescheduled_from_id' => $original->id,
+            ]);
+
+            return $new->load('rescheduledFrom:id,appointment_date,start_time');
+        });
     }
 
     /**

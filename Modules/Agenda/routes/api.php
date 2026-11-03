@@ -16,6 +16,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::get('{appointment}', 'show')->whereNumber('appointment')->middleware('permission:appointments.view');
         Route::match(['put', 'patch'], '{appointment}', 'update')->whereNumber('appointment')->middleware('permission:appointments.edit');
         Route::post('{appointment}/status', 'status')->whereNumber('appointment')->middleware('permission:appointments.edit');
+        Route::post('{appointment}/reschedule', 'reschedule')->whereNumber('appointment')->middleware('permission:appointments.edit');
         Route::delete('{appointment}', 'destroy')->whereNumber('appointment')->middleware('permission:appointments.delete');
     });
 });

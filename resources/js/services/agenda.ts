@@ -19,6 +19,23 @@ export interface Appointment {
     customer: { id: number; code: string | null; name: string; phone: string | null; whatsapp: string | null } | null;
     service: { id: number; name: string } | null;
     employee: { id: number; name: string } | null;
+    /** Cita original, si esta nació de una reprogramación. */
+    rescheduled_from?: AppointmentMoment | null;
+    /** Cita nueva a la que se movió esta. */
+    rescheduled_to?: AppointmentMoment | null;
+}
+
+export interface AppointmentMoment {
+    id: number;
+    appointment_date: string;
+    start_time: string;
+}
+
+export interface ReschedulePayload {
+    appointment_date: string;
+    start_time: string;
+    end_time: string;
+    employee_id?: number | null;
 }
 
 export interface AppointmentPayload {
@@ -38,7 +55,7 @@ export const APPOINTMENT_STATUS: Record<AppointmentStatus, { label: string; seve
     confirmed: { label: 'Confirmada', severity: 'info' },
     attended: { label: 'Atendida', severity: 'success' },
     cancelled: { label: 'Cancelada', severity: 'danger' },
-    postponed: { label: 'Pospuesta', severity: 'secondary' },
+    postponed: { label: 'Reprogramó', severity: 'secondary' },
     no_show: { label: 'No se presentó', severity: 'danger' },
 };
 
@@ -78,6 +95,21 @@ export interface AttendancePayload {
     supplies: { product_id: number; quantity: number }[];
 }
 
+/** Varios servicios en la misma visita: datos comunes y una línea por servicio. */
+export interface AttendanceBatchPayload {
+    customer_id: number | null;
+    appointment_id?: number | null;
+    attended_at: string;
+    observations?: string | null;
+    measurements?: string | null;
+    services: {
+        service_id: number | null;
+        employee_id: number | null;
+        customer_package_id?: number | null;
+        supplies: { product_id: number; quantity: number }[];
+    }[];
+}
+
 export interface ServiceSupply {
     supply_id: number;
     name: string | null;
@@ -108,6 +140,10 @@ export const appointmentsApi = {
     async status(id: number, status: AppointmentStatus): Promise<Appointment> {
         return unwrap<Appointment>(await http.post(`/appointments/${id}/status`, { status }));
     },
+    /** El cliente avisó: crea la cita nueva y deja la original como «Reprogramó». */
+    async reschedule(id: number, payload: ReschedulePayload): Promise<Appointment> {
+        return unwrap<Appointment>(await http.post(`/appointments/${id}/reschedule`, payload));
+    },
     async remove(id: number): Promise<void> {
         await http.delete(`/appointments/${id}`);
     },
@@ -122,6 +158,10 @@ export const attendancesApi = {
     },
     async create(payload: AttendancePayload): Promise<Attendance> {
         return unwrap<Attendance>(await http.post('/attendances', payload));
+    },
+    /** Una atención por servicio, todas o ninguna (la cita la cierra el primero). */
+    async createMany(payload: AttendanceBatchPayload): Promise<Attendance[]> {
+        return unwrap<Attendance[]>(await http.post('/attendances/batch', payload));
     },
 };
 

@@ -62,7 +62,9 @@ const dialog = ref(false);
 const saving = ref(false);
 const errors = ref<Record<string, string[]>>({});
 const editingId = ref<number | null>(null);
-const form = ref<AppointmentPayload & { date: Date }>({ customer_id: null, service_id: null, employee_id: null, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date() });
+/** Cita ya atendida: su horario, servicio y especialista quedaron en la atención; solo se editan título y notas. */
+const editingAttended = ref<Appointment | null>(null);
+const form =ref<AppointmentPayload & { date: Date }>({ customer_id: null, service_id: null, employee_id: null, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date() });
 const formEmployees = ref<Employee[]>([]);
 
 /** Qué visita del cliente será (al crear) o es (al editar). */
@@ -95,6 +97,7 @@ async function refreshFormEmployees(): Promise<void> {
 async function openCreate(): Promise<void> {
     await loadOptions();
     editingId.value = null;
+    editingAttended.value = null;
     errors.value = {};
     form.value = { customer_id: null, service_id: null, employee_id: employeeId.value, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date(day.value) };
     await refreshFormEmployees();
@@ -109,7 +112,9 @@ async function openEdit(a: Appointment): Promise<void> {
         start_time: a.start_time, end_time: a.end_time, title: a.title ?? '', notes: a.notes ?? '', status: a.status, date: new Date(`${a.appointment_date}T00:00:00`),
     };
     visitNumber.value = a.visit_number;
-    await refreshFormEmployees();
+    editingAttended.value = a.status === 'attended' ? a : null;
+    // En la atendida no se cambia el especialista: no hace falta (ni conviene) refiltrar la lista.
+    if (!editingAttended.value) await refreshFormEmployees();
     dialog.value = true;
 }
 
@@ -158,6 +163,65 @@ function remove(a: Appointment): void {
 }
 const attend = (a: Appointment): void => { router.push({ name: 'attendances', query: { appointment: String(a.id) } }); };
 
+// --- Reprogramar ---------------------------------------------------------
+// El cliente avisó que no puede venir: la cita pasa a otra fecha y la original
+// queda como «Reprogramó» (a diferencia de «No se presentó», que no avisó).
+const rescheduleDialog = ref(false);
+const rescheduling = ref(false);
+const rescheduleErrors = ref<Record<string, string[]>>({});
+const rescheduleOf = ref<Appointment | null>(null);
+const rescheduleForm = ref({ date: new Date(), start_time: '09:00', end_time: '10:00', employee_id: null as number | null });
+const rescheduleEmployees = ref<Employee[]>([]);
+const todayStart = (): Date => new Date(new Date().setHours(0, 0, 0, 0));
+
+const toMinutes = (t: string): number => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const fromMinutes = (n: number): string => `${String(Math.floor(n / 60) % 24).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+const shortDay = (s: string): string => new Date(`${s}T00:00:00`).toLocaleDateString('es-PE', { weekday: 'short', day: '2-digit', month: '2-digit' });
+const goToDay = (s: string): void => { day.value = new Date(`${s}T00:00:00`); };
+
+async function openReschedule(a: Appointment): Promise<void> {
+    rescheduleOf.value = a;
+    rescheduleErrors.value = {};
+    // Por defecto el día siguiente al de la cita, nunca antes de hoy.
+    const next = new Date(`${a.appointment_date}T00:00:00`);
+    next.setDate(next.getDate() + 1);
+    rescheduleForm.value = { date: next < todayStart() ? todayStart() : next, start_time: a.start_time, end_time: a.end_time, employee_id: a.employee_id };
+    rescheduleEmployees.value = await employeesApi.options(a.service_id);
+    if (!rescheduleEmployees.value.some((e) => e.id === a.employee_id)) rescheduleForm.value.employee_id = null;
+    rescheduleDialog.value = true;
+}
+/** Al cambiar el inicio, la cita mantiene la duración que tenía. */
+function onRescheduleStartChange(): void {
+    const a = rescheduleOf.value;
+    if (!a) return;
+    rescheduleForm.value.end_time = fromMinutes(toMinutes(rescheduleForm.value.start_time) + toMinutes(a.end_time) - toMinutes(a.start_time));
+}
+async function submitReschedule(): Promise<void> {
+    const a = rescheduleOf.value;
+    if (!a) return;
+    rescheduling.value = true;
+    rescheduleErrors.value = {};
+    try {
+        const { date, ...payload } = rescheduleForm.value;
+        const created = await appointmentsApi.reschedule(a.id, { ...payload, appointment_date: isoDate(date) });
+        rescheduleDialog.value = false;
+        toast.add({ severity: 'success', summary: 'Cita reprogramada', detail: `Nueva cita: ${shortDay(created.appointment_date)} a las ${created.start_time}`, life: 3000 });
+        load();
+    } catch (e) {
+        const ax = e as AxiosError<{ errors?: Record<string, string[]>; message?: string }>;
+        if (ax.response?.data?.errors) rescheduleErrors.value = ax.response.data.errors;
+        else toast.add({ severity: 'warn', summary: 'No se pudo reprogramar', detail: ax.response?.data?.message, life: 5000 });
+    } finally {
+        rescheduling.value = false;
+    }
+}
+/** Avisó pero aún no tiene fecha: se marca y luego se le da una desde la misma fila. */
+async function markPostponed(): Promise<void> {
+    if (!rescheduleOf.value) return;
+    rescheduleDialog.value = false;
+    await setStatus(rescheduleOf.value, 'postponed');
+}
+
 onMounted(async () => {
     employees.value = await employeesApi.options();
     load();
@@ -194,7 +258,7 @@ onMounted(async () => {
                             {{ data.title || data.service?.name }}
                             <i v-if="data.notes" class="pi pi-comment ml-1 text-xs text-slate-400" v-tooltip.top="data.notes"></i>
                         </p>
-                        <p v-if="data.title" class="text-xs text-slate-400">{{ data.service?.name }}</p>
+                        <span v-if="data.title" class="mt-1 inline-block rounded-md bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-white/10 dark:text-slate-200">{{ data.service?.name }}</span>
                     </template>
                 </Column>
                 <Column header="Cliente">
@@ -213,18 +277,42 @@ onMounted(async () => {
                 </Column>
                 <Column header="Especialista"><template #body="{ data }">{{ data.employee?.name }}</template></Column>
                 <Column header="Estado">
-                    <template #body="{ data }"><Tag :value="APPOINTMENT_STATUS[data.status as AppointmentStatus].label" :severity="APPOINTMENT_STATUS[data.status as AppointmentStatus].severity" /></template>
+                    <template #body="{ data }">
+                        <Tag :value="APPOINTMENT_STATUS[data.status as AppointmentStatus].label" :severity="APPOINTMENT_STATUS[data.status as AppointmentStatus].severity" />
+                        <button
+                            v-if="data.rescheduled_to"
+                            type="button"
+                            class="mt-1 block text-xs text-slate-500 hover:text-brand-600 hover:underline"
+                            v-tooltip.top="'Ver la nueva cita'"
+                            @click="goToDay(data.rescheduled_to.appointment_date)"
+                        ><i class="pi pi-arrow-right mr-1 text-[10px]"></i>{{ shortDay(data.rescheduled_to.appointment_date) }} · {{ data.rescheduled_to.start_time }}</button>
+                        <button
+                            v-else-if="data.rescheduled_from"
+                            type="button"
+                            class="mt-1 block text-xs text-slate-500 hover:text-brand-600 hover:underline"
+                            v-tooltip.top="'Ver la cita original'"
+                            @click="goToDay(data.rescheduled_from.appointment_date)"
+                        ><i class="pi pi-replay mr-1 text-[10px]"></i>Reprogramada del {{ shortDay(data.rescheduled_from.appointment_date) }}</button>
+                    </template>
                 </Column>
-                <Column header="" header-style="width:15rem">
+                <Column header="" header-style="width:17rem">
                     <template #body="{ data }">
                         <div class="flex justify-end gap-1">
                             <template v-if="['pending', 'confirmed'].includes(data.status)">
                                 <Button v-if="auth.can('attendances.create')" label="Atender" icon="pi pi-check-circle" size="small" @click="attend(data)" />
                                 <Button v-if="data.status === 'pending' && auth.can('appointments.edit')" icon="pi pi-thumbs-up" text rounded size="small" v-tooltip.top="'Confirmar'" @click="setStatus(data, 'confirmed')" />
+                                <Button v-if="auth.can('appointments.edit')" icon="pi pi-calendar-clock" text rounded size="small" severity="help" v-tooltip.top="'Reprogramó'" @click="openReschedule(data)" />
                                 <Button v-if="auth.can('appointments.edit')" icon="pi pi-user-minus" text rounded size="small" severity="warn" v-tooltip.top="'No se presentó'" @click="setStatus(data, 'no_show')" />
                                 <Button v-if="auth.can('appointments.edit')" icon="pi pi-ban" text rounded size="small" severity="danger" v-tooltip.top="'Cancelar cita'" @click="setStatus(data, 'cancelled')" />
                             </template>
-                            <Button v-if="auth.can('appointments.edit') && data.status !== 'attended'" icon="pi pi-pencil" text rounded size="small" @click="openEdit(data)" />
+                            <Button
+                                v-else-if="data.status === 'postponed' && !data.rescheduled_to && auth.can('appointments.edit')"
+                                icon="pi pi-calendar-clock" text rounded size="small" severity="help" v-tooltip.top="'Darle nueva fecha'" @click="openReschedule(data)"
+                            />
+                            <Button
+                                v-if="auth.can('appointments.edit')" icon="pi pi-pencil" text rounded size="small"
+                                v-tooltip.top="data.status === 'attended' ? 'Editar título y notas' : 'Editar'" @click="openEdit(data)"
+                            />
                             <Button v-if="auth.can('appointments.delete') && data.status !== 'attended'" icon="pi pi-trash" text rounded size="small" severity="danger" @click="remove(data)" />
                         </div>
                     </template>
@@ -234,7 +322,15 @@ onMounted(async () => {
 
         <Dialog v-model:visible="dialog" modal :header="editingId ? 'Editar cita' : 'Nueva cita'" :style="{ width: '560px' }">
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div class="md:col-span-2">
+                <div v-if="editingAttended" class="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2 dark:bg-white/5">
+                    <p class="font-semibold">{{ editingAttended.customer?.name }}</p>
+                    <p class="text-slate-500">
+                        {{ editingAttended.service?.name }} · {{ editingAttended.employee?.name }} ·
+                        {{ shortDay(editingAttended.appointment_date) }}, {{ editingAttended.start_time }} – {{ editingAttended.end_time }}
+                    </p>
+                    <p class="mt-2 text-xs text-slate-500"><i class="pi pi-lock mr-1 text-[10px]"></i>Ya fue atendida: solo se cambian el título y las notas.</p>
+                </div>
+                <div v-else class="md:col-span-2">
                     <label class="mb-1 block text-sm font-medium">Cliente *</label>
                     <Select v-model="form.customer_id" :options="customers" option-label="name" option-value="id" filter class="w-full" placeholder="Buscar cliente" :invalid="!!errors.customer_id" />
                     <Message v-if="errors.customer_id" severity="error" size="small" variant="simple">{{ errors.customer_id[0] }}</Message>
@@ -247,30 +343,32 @@ onMounted(async () => {
                     <InputText v-model="form.title" maxlength="120" class="w-full" placeholder="Ej.: Evaluación inicial, Control, Retoque…" :invalid="!!errors.title" />
                     <Message v-if="errors.title" severity="error" size="small" variant="simple">{{ errors.title[0] }}</Message>
                 </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium">Servicio *</label>
-                    <Select v-model="form.service_id" :options="services" option-label="name" option-value="id" filter class="w-full" :invalid="!!errors.service_id" @change="refreshFormEmployees" />
-                </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium">Especialista *</label>
-                    <Select v-model="form.employee_id" :options="formEmployees" option-label="name" option-value="id" class="w-full" :invalid="!!errors.employee_id" />
-                </div>
-                <div>
-                    <label class="mb-1 block text-sm font-medium">Fecha *</label>
-                    <DatePicker v-model="form.date" date-format="dd/mm/yy" show-icon class="w-full" :invalid="!!errors.appointment_date" />
-                    <Message v-if="errors.appointment_date" severity="error" size="small" variant="simple">{{ errors.appointment_date[0] }}</Message>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
+                <template v-if="!editingAttended">
                     <div>
-                        <label class="mb-1 block text-sm font-medium">Inicio</label>
-                        <InputText v-model="form.start_time" type="time" class="w-full" @change="onStartChange" />
+                        <label class="mb-1 block text-sm font-medium">Servicio *</label>
+                        <Select v-model="form.service_id" :options="services" option-label="name" option-value="id" filter class="w-full" :invalid="!!errors.service_id" @change="refreshFormEmployees" />
                     </div>
                     <div>
-                        <label class="mb-1 block text-sm font-medium">Fin</label>
-                        <InputText v-model="form.end_time" type="time" class="w-full" :invalid="!!errors.end_time" />
+                        <label class="mb-1 block text-sm font-medium">Especialista *</label>
+                        <Select v-model="form.employee_id" :options="formEmployees" option-label="name" option-value="id" class="w-full" :invalid="!!errors.employee_id" />
                     </div>
-                </div>
-                <Message v-if="errors.end_time" class="md:col-span-2" severity="error" size="small" variant="simple">{{ errors.end_time[0] }}</Message>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium">Fecha *</label>
+                        <DatePicker v-model="form.date" date-format="dd/mm/yy" show-icon class="w-full" :invalid="!!errors.appointment_date" />
+                        <Message v-if="errors.appointment_date" severity="error" size="small" variant="simple">{{ errors.appointment_date[0] }}</Message>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="mb-1 block text-sm font-medium">Inicio</label>
+                            <InputText v-model="form.start_time" type="time" class="w-full" @change="onStartChange" />
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium">Fin</label>
+                            <InputText v-model="form.end_time" type="time" class="w-full" :invalid="!!errors.end_time" />
+                        </div>
+                    </div>
+                    <Message v-if="errors.end_time" class="md:col-span-2" severity="error" size="small" variant="simple">{{ errors.end_time[0] }}</Message>
+                </template>
                 <div class="md:col-span-2">
                     <label class="mb-1 block text-sm font-medium">Notas</label>
                     <Textarea v-model="form.notes" rows="2" auto-resize class="w-full" />
@@ -279,6 +377,46 @@ onMounted(async () => {
             <template #footer>
                 <Button label="Cancelar" text @click="dialog = false" />
                 <Button label="Guardar" icon="pi pi-check" :loading="saving" @click="submit" />
+            </template>
+        </Dialog>
+
+        <Dialog v-model:visible="rescheduleDialog" modal header="Reprogramar cita" :style="{ width: '480px' }">
+            <div v-if="rescheduleOf" class="space-y-4">
+                <div class="rounded-xl bg-slate-50 p-3 text-sm dark:bg-white/5">
+                    <p class="font-semibold">{{ rescheduleOf.customer?.name }}</p>
+                    <p class="text-slate-500">{{ rescheduleOf.title || rescheduleOf.service?.name }} · {{ shortDay(rescheduleOf.appointment_date) }}, {{ rescheduleOf.start_time }}</p>
+                </div>
+                <p class="text-xs text-slate-500">El cliente avisó: esta cita quedará como «Reprogramó» y se creará la nueva con el mismo servicio, título y notas.</p>
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div class="md:col-span-2">
+                        <label class="mb-1 block text-sm font-medium">Nueva fecha *</label>
+                        <DatePicker v-model="rescheduleForm.date" date-format="dd/mm/yy" show-icon :min-date="todayStart()" class="w-full" :invalid="!!rescheduleErrors.appointment_date" />
+                        <Message v-if="rescheduleErrors.appointment_date" severity="error" size="small" variant="simple">{{ rescheduleErrors.appointment_date[0] }}</Message>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium">Inicio</label>
+                        <InputText v-model="rescheduleForm.start_time" type="time" class="w-full" @change="onRescheduleStartChange" />
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium">Fin</label>
+                        <InputText v-model="rescheduleForm.end_time" type="time" class="w-full" :invalid="!!rescheduleErrors.end_time" />
+                    </div>
+                    <Message v-if="rescheduleErrors.end_time" class="md:col-span-2" severity="error" size="small" variant="simple">{{ rescheduleErrors.end_time[0] }}</Message>
+                    <div class="md:col-span-2">
+                        <label class="mb-1 block text-sm font-medium">Especialista *</label>
+                        <Select v-model="rescheduleForm.employee_id" :options="rescheduleEmployees" option-label="name" option-value="id" class="w-full" :invalid="!!rescheduleErrors.employee_id" />
+                    </div>
+                </div>
+            </div>
+            <template #footer>
+                <Button label="Cancelar" text @click="rescheduleDialog = false" />
+                <Button
+                    v-if="rescheduleOf?.status !== 'postponed'"
+                    label="Aún sin fecha" text severity="secondary"
+                    v-tooltip.top="'Solo marcarla como «Reprogramó»; la nueva fecha se le da después desde la misma fila'"
+                    @click="markPostponed"
+                />
+                <Button label="Reprogramar" icon="pi pi-calendar-clock" :loading="rescheduling" :disabled="!rescheduleForm.employee_id" @click="submitReschedule" />
             </template>
         </Dialog>
     </div>

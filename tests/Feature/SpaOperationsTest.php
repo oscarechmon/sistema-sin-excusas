@@ -229,6 +229,77 @@ class SpaOperationsTest extends TestCase
             ->assertOk()->assertJsonPath('data.visit_number', 4);
     }
 
+    public function test_en_una_cita_atendida_solo_se_editan_titulo_y_notas(): void
+    {
+        $service = $this->service();
+        $other = $this->service(80, 'Masaje');
+        $employee = $this->employee();
+        $customer = Customer::factory()->create();
+        $appointment = Appointment::create([
+            'customer_id' => $customer->id, 'service_id' => $service->id, 'employee_id' => $employee->id,
+            'appointment_date' => today()->toDateString(), 'start_time' => '09:00:00', 'end_time' => '10:00:00', 'status' => 'attended',
+        ]);
+
+        $this->putJson("/api/v1/appointments/{$appointment->id}", [
+            'customer_id' => $customer->id, 'service_id' => $other->id, 'employee_id' => $employee->id,
+            'appointment_date' => today()->addDays(3)->toDateString(), 'start_time' => '15:00', 'end_time' => '16:00',
+            'title' => 'Cita 8', 'notes' => 'Llegó tarde', 'status' => 'pending',
+        ])->assertOk()
+            ->assertJsonPath('data.title', 'Cita 8')
+            ->assertJsonPath('data.notes', 'Llegó tarde')
+            ->assertJsonPath('data.status', 'attended')
+            ->assertJsonPath('data.service_id', $service->id)
+            ->assertJsonPath('data.appointment_date', today()->toDateString())
+            ->assertJsonPath('data.start_time', '09:00');
+    }
+
+    public function test_reprogramar_mueve_la_cita_y_la_original_queda_como_reprogramo(): void
+    {
+        $service = $this->service();
+        $employee = $this->employee();
+        $customer = Customer::factory()->create();
+        $original = $this->postJson('/api/v1/appointments', [
+            'customer_id' => $customer->id, 'service_id' => $service->id, 'employee_id' => $employee->id,
+            'appointment_date' => today()->addDay()->toDateString(), 'start_time' => '10:00', 'end_time' => '11:00',
+            'title' => 'Control', 'notes' => 'Trae sus exámenes',
+        ])->assertCreated()->json('data.id');
+
+        // Se puede mover a una hora que se cruza con la de antes: la original libera su horario.
+        $newDate = today()->addDay()->toDateString();
+        $new = $this->postJson("/api/v1/appointments/{$original}/reschedule", [
+            'appointment_date' => $newDate, 'start_time' => '10:30', 'end_time' => '11:30',
+        ])->assertOk()
+            ->assertJsonPath('data.status', 'pending')
+            ->assertJsonPath('data.title', 'Control')
+            ->assertJsonPath('data.notes', 'Trae sus exámenes')
+            ->assertJsonPath('data.employee_id', $employee->id)
+            ->assertJsonPath('data.visit_number', 1)
+            ->assertJsonPath('data.rescheduled_from.id', $original)
+            ->json('data.id');
+
+        $this->getJson("/api/v1/appointments/{$original}")
+            ->assertJsonPath('data.status', Appointment::STATUS_POSTPONED)
+            ->assertJsonPath('data.visit_number', null)
+            ->assertJsonPath('data.rescheduled_to.id', $new)
+            ->assertJsonPath('data.rescheduled_to.start_time', '10:30');
+
+        // Ya tiene fecha nueva: no se reprograma dos veces.
+        $this->postJson("/api/v1/appointments/{$original}/reschedule", [
+            'appointment_date' => $newDate, 'start_time' => '15:00', 'end_time' => '16:00',
+        ])->assertStatus(422);
+
+        // Si choca con otra cita del especialista, no cambia nada.
+        $this->postJson('/api/v1/appointments', [
+            'customer_id' => $customer->id, 'service_id' => $service->id, 'employee_id' => $employee->id,
+            'appointment_date' => $newDate, 'start_time' => '17:00', 'end_time' => '18:00',
+        ])->assertCreated();
+        $this->postJson("/api/v1/appointments/{$new}/reschedule", [
+            'appointment_date' => $newDate, 'start_time' => '17:30', 'end_time' => '18:30',
+        ])->assertStatus(422);
+        $this->assertSame(Appointment::STATUS_PENDING, Appointment::find($new)->status);
+        $this->assertSame(0, Appointment::where('rescheduled_from_id', $new)->count());
+    }
+
     // -------------------------------------------------------------- Atenciones
 
     public function test_una_atencion_consume_sesion_descuenta_insumos_cierra_la_cita_y_genera_comision(): void
@@ -263,6 +334,65 @@ class SpaOperationsTest extends TestCase
         $commission = Commission::where('attendance_id', $id)->sole();
         $this->assertEquals(100.0, (float) $commission->base_amount);
         $this->assertEquals(20.0, (float) $commission->amount);
+    }
+
+    public function test_una_visita_con_varios_servicios_registra_una_atencion_por_cada_uno(): void
+    {
+        $facial = $this->service(100, 'Limpieza facial');
+        $masaje = $this->service(80, 'Masaje relajante');
+        $gel = $this->supply(10);
+        $meri = $this->employee();
+        $lucero = $this->employee();
+        $customer = Customer::factory()->create();
+        $owned = app(\Modules\Packages\Services\CustomerPackageService::class)->assign($this->package($facial, 4, 400), $customer->id);
+        CommissionRule::create(['type' => 'percentage', 'value' => 10, 'is_active' => true]);
+
+        $appointment = Appointment::create([
+            'customer_id' => $customer->id, 'service_id' => $facial->id, 'employee_id' => $meri->id,
+            'appointment_date' => today()->toDateString(), 'start_time' => '09:00:00', 'end_time' => '10:00:00', 'status' => 'confirmed',
+        ]);
+
+        $created = $this->postJson('/api/v1/attendances/batch', [
+            'customer_id' => $customer->id, 'appointment_id' => $appointment->id,
+            'attended_at' => today()->toDateString(), 'observations' => 'Piel sensible',
+            'services' => [
+                ['service_id' => $facial->id, 'employee_id' => $meri->id, 'customer_package_id' => $owned->id, 'supplies' => [['product_id' => $gel->id, 'quantity' => 2]]],
+                ['service_id' => $masaje->id, 'employee_id' => $lucero->id, 'supplies' => [['product_id' => $gel->id, 'quantity' => 1]]],
+            ],
+        ])->assertCreated()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.session_number', 1)
+            ->assertJsonPath('data.0.appointment_id', $appointment->id)
+            ->assertJsonPath('data.1.appointment_id', null)
+            ->assertJsonPath('data.1.observations', 'Piel sensible')
+            ->json('data');
+
+        $this->assertSame(1, $owned->fresh()->used_sessions);
+        $this->assertEquals(7.0, $this->stockOf($gel));
+        $this->assertSame(Appointment::STATUS_ATTENDED, $appointment->fresh()->status);
+        // Cada especialista cobra lo suyo: la sesión del paquete (400 / 4) y el masaje suelto.
+        $this->assertEquals(10.0, (float) Commission::where('attendance_id', $created[0]['id'])->sole()->amount);
+        $this->assertEquals(8.0, (float) Commission::where('attendance_id', $created[1]['id'])->sole()->amount);
+        $this->assertSame($lucero->id, Commission::where('attendance_id', $created[1]['id'])->sole()->employee_id);
+
+        // Si un servicio falla (insumo que no alcanza), no se registra ninguno.
+        $this->postJson('/api/v1/attendances/batch', [
+            'customer_id' => $customer->id, 'attended_at' => today()->toDateString(),
+            'services' => [
+                ['service_id' => $facial->id, 'employee_id' => $meri->id, 'customer_package_id' => $owned->id],
+                ['service_id' => $masaje->id, 'employee_id' => $lucero->id, 'supplies' => [['product_id' => $gel->id, 'quantity' => 50]]],
+            ],
+        ])->assertStatus(422);
+        $this->assertSame(2, Attendance::count());
+        $this->assertSame(1, $owned->fresh()->used_sessions);
+
+        // Un insumo repetido dentro del mismo servicio se rechaza.
+        $this->postJson('/api/v1/attendances/batch', [
+            'customer_id' => $customer->id, 'attended_at' => today()->toDateString(),
+            'services' => [['service_id' => $masaje->id, 'employee_id' => $lucero->id, 'supplies' => [
+                ['product_id' => $gel->id, 'quantity' => 1], ['product_id' => $gel->id, 'quantity' => 1],
+            ]]],
+        ])->assertStatus(422)->assertJsonValidationErrors('services.0.supplies');
     }
 
     public function test_si_un_insumo_no_alcanza_no_se_registra_nada(): void

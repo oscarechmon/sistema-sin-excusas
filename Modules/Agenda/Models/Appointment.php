@@ -7,6 +7,7 @@ namespace Modules\Agenda\Models;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Modules\Catalog\Models\Product;
 use Modules\Contacts\Models\Customer;
 use Modules\Staff\Models\Employee;
@@ -38,9 +39,12 @@ class Appointment extends Model implements Auditable
     /** Estados que ya no ocupan el horario del especialista. */
     public const FREE_STATUSES = [self::STATUS_CANCELLED, self::STATUS_POSTPONED, self::STATUS_NO_SHOW];
 
+    /** Estados desde los que el cliente puede reprogramar (la pospuesta, si aún no tiene fecha nueva). */
+    public const RESCHEDULABLE_STATUSES = [self::STATUS_PENDING, self::STATUS_CONFIRMED, self::STATUS_POSTPONED];
+
     protected $fillable = [
         'customer_id', 'service_id', 'employee_id', 'appointment_date',
-        'start_time', 'end_time', 'title', 'status', 'notes', 'created_by',
+        'start_time', 'end_time', 'title', 'status', 'notes', 'rescheduled_from_id', 'created_by',
     ];
 
     protected $casts = ['appointment_date' => 'date'];
@@ -58,6 +62,18 @@ class Appointment extends Model implements Auditable
     public function employee(): BelongsTo
     {
         return $this->belongsTo(Employee::class)->withTrashed();
+    }
+
+    /** Cita original, si esta nació de una reprogramación. */
+    public function rescheduledFrom(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'rescheduled_from_id');
+    }
+
+    /** Cita nueva a la que se movió esta. */
+    public function rescheduledTo(): HasOne
+    {
+        return $this->hasOne(self::class, 'rescheduled_from_id');
     }
 
     public function creator(): BelongsTo

@@ -17,7 +17,10 @@ class AppointmentRepository extends BaseRepository
 
     protected array $sortable = ['id', 'appointment_date', 'start_time', 'created_at'];
 
-    protected array $defaultWith = ['customer:id,code,name,phone,whatsapp', 'service:id,name', 'employee:id,name'];
+    protected array $defaultWith = [
+        'customer:id,code,name,phone,whatsapp', 'service:id,name', 'employee:id,name',
+        'rescheduledFrom:id,appointment_date,start_time', 'rescheduledTo:id,rescheduled_from_id,appointment_date,start_time',
+    ];
 
     protected function model(): Model
     {

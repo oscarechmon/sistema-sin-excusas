@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Attendances\Services;
 
 use App\Core\Exceptions\BusinessException;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Modules\Agenda\Models\Appointment;
 use Modules\Attendances\Models\Attendance;
@@ -86,6 +87,30 @@ class AttendanceService
             );
 
             return $attendance->load(['customer', 'service', 'employee', 'supplies.product', 'commission', 'customerPackage']);
+        });
+    }
+
+    /**
+     * Varios servicios en la misma visita: una atención por servicio (cada una
+     * con su sesión de paquete, sus insumos y su comisión), todas o ninguna.
+     * La cita, si la hay, la cierra el primero.
+     *
+     * @param  array<string, mixed>  $data  customer_id, appointment_id?, attended_at, observations?, measurements?,
+     *                                      services[]{service_id, employee_id, customer_package_id?, supplies[]}
+     * @return list<Attendance>
+     */
+    public function confirmMany(array $data, ?int $userId = null): array
+    {
+        return DB::transaction(function () use ($data, $userId): array {
+            $common = Arr::only($data, ['customer_id', 'attended_at', 'observations', 'measurements']);
+            $attendances = [];
+
+            foreach (array_values($data['services']) as $i => $line) {
+                $appointment = ['appointment_id' => $i === 0 ? ($data['appointment_id'] ?? null) : null];
+                $attendances[] = $this->confirm($appointment + $line + $common, $userId);
+            }
+
+            return $attendances;
         });
     }
 

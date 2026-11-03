@@ -61,6 +61,22 @@ class AppointmentController extends ApiController
         return $this->ok(new AppointmentResource($this->service->changeStatus($appointment, $data['status'])), 'Estado actualizado.');
     }
 
+    /** El cliente avisó: la cita pasa a otra fecha (la original queda como «Reprogramó»). */
+    public function reschedule(Request $request, int $appointment): JsonResponse
+    {
+        $data = $request->validate([
+            'appointment_date' => ['required', 'date', 'after_or_equal:today'],
+            'start_time' => ['required', 'date_format:H:i'],
+            'end_time' => ['required', 'date_format:H:i', 'after:start_time'],
+            'employee_id' => ['nullable', 'exists:employees,id'],
+        ], [
+            'appointment_date.after_or_equal' => 'La nueva fecha no puede ser en el pasado.',
+            'end_time.after' => 'La hora de fin debe ser posterior a la de inicio.',
+        ]);
+
+        return $this->ok(new AppointmentResource($this->service->reschedule($appointment, $data)), 'Cita reprogramada.');
+    }
+
     public function destroy(int $appointment): JsonResponse
     {
         $this->service->delete($appointment);

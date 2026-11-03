@@ -13,6 +13,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
     Route::controller(AttendanceController::class)->prefix('attendances')->group(function (): void {
         Route::get('/', 'index')->middleware('permission:attendances.view');
         Route::post('/', 'store')->middleware('permission:attendances.create');
+        Route::post('batch', 'storeMany')->middleware('permission:attendances.create');
         Route::get('{attendance}', 'show')->whereNumber('attendance')->middleware('permission:attendances.view');
     });
 
