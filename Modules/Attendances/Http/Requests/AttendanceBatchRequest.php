@@ -28,6 +28,8 @@ class AttendanceBatchRequest extends FormRequest
             'services' => ['required', 'array', 'min:1', 'max:10'],
             'services.*.service_id' => ['required', Rule::exists('products', 'id')->where('type', Product::TYPE_SERVICE)],
             'services.*.employee_id' => ['required', 'exists:employees,id'],
+            // La cita de ese servicio, si la visita se agendó con varias.
+            'services.*.appointment_id' => ['nullable', 'distinct', 'exists:appointments,id'],
             'services.*.customer_package_id' => ['nullable', 'exists:customer_packages,id'],
             'services.*.supplies' => ['nullable', 'array'],
             'services.*.supplies.*.product_id' => ['required', Rule::exists('products', 'id')->where('type', Product::TYPE_PRODUCT)],

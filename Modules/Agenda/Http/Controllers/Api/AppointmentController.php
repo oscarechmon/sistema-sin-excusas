@@ -8,6 +8,7 @@ use App\Core\Http\Controllers\ApiController;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Modules\Agenda\Http\Requests\AppointmentBatchRequest;
 use Modules\Agenda\Http\Requests\AppointmentRequest;
 use Modules\Agenda\Http\Resources\AppointmentResource;
 use Modules\Agenda\Models\Appointment;
@@ -41,6 +42,15 @@ class AppointmentController extends ApiController
     public function store(AppointmentRequest $request): JsonResponse
     {
         return $this->created(new AppointmentResource($this->service->create($request->validated())), 'Cita registrada.');
+    }
+
+    /** Varios servicios en la misma visita: una cita por cada uno, todas o ninguna. */
+    public function storeMany(AppointmentBatchRequest $request): JsonResponse
+    {
+        $appointments = $this->service->createMany($request->validated());
+        $message = count($appointments) === 1 ? 'Cita registrada.' : count($appointments).' citas registradas.';
+
+        return $this->created(AppointmentResource::collection($appointments), $message);
     }
 
     public function show(int $appointment): JsonResponse

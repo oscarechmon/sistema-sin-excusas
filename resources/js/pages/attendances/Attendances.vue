@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useToast } from 'primevue/usetoast';
 import DataTable, { type DataTablePageEvent } from 'primevue/datatable';
@@ -16,7 +16,7 @@ import IconField from 'primevue/iconfield';
 import InputIcon from 'primevue/inputicon';
 import Message from 'primevue/message';
 import { AxiosError } from 'axios';
-import { attendancesApi, appointmentsApi, serviceSuppliesApi, isoDate, visitLabel, type Attendance } from '@/services/agenda';
+import { attendancesApi, appointmentsApi, serviceSuppliesApi, isoDate, visitLabel, type Appointment, type Attendance } from '@/services/agenda';
 import { customerPackagesApi, type CustomerPackage } from '@/services/packages';
 import { employeesApi, type Employee } from '@/services/staff';
 import { customersApi, type Customer } from '@/services/contacts';
@@ -69,6 +69,8 @@ interface ServiceLine {
     key: number;
     service_id: number | null;
     employee_id: number | null;
+    /** Cita de la agenda que este servicio cierra (si la visita se agendó con varios servicios). */
+    appointment: Appointment | null;
     customer_package_id: number | null;
     supplies: SupplyLine[];
     employees: Employee[];
@@ -83,9 +85,10 @@ const services = ref<Product[]>([]);
 const supplies = ref<Product[]>([]);
 const allEmployees = ref<Employee[]>([]);
 const appointmentLabel = ref<string | null>(null);
+/** Citas vigentes del cliente ese mismo día (la visita pudo agendarse con varios servicios). */
+const sameDay = ref<Appointment[]>([]);
 const form = ref({
     customer_id: null as number | null,
-    appointment_id: null as number | null,
     date: new Date(),
     observations: '',
     measurements: '',
@@ -93,7 +96,11 @@ const form = ref({
 });
 
 let lineKey = 0;
-const newLine = (): ServiceLine => ({ key: ++lineKey, service_id: null, employee_id: null, customer_package_id: null, supplies: [], employees: allEmployees.value, packages: [] });
+const newLine = (): ServiceLine => ({ key: ++lineKey, service_id: null, employee_id: null, appointment: null, customer_package_id: null, supplies: [], employees: allEmployees.value, packages: [] });
+
+/** Citas del mismo día que aún no están en la atención: se ofrecen para agregarlas. */
+const otherAppointments = computed(() => sameDay.value.filter((a) => !form.value.lines.some((l) => l.appointment?.id === a.id)));
+const linkedAppointments = computed(() => form.value.lines.filter((l) => l.appointment).length);
 
 function packageOptions(i: number): { id: number; label: string }[] {
     return form.value.lines[i].packages.map((p) => {
@@ -122,7 +129,15 @@ async function refreshPackages(line: ServiceLine): Promise<void> {
         line.customer_package_id = line.packages[0]?.id ?? null;
     }
 }
-const onCustomerChange = async (): Promise<void> => { await Promise.all(form.value.lines.map(refreshPackages)); };
+async function onCustomerChange(): Promise<void> {
+    // Las citas eran de otro cliente: ya no se cierran desde esta atención.
+    if (sameDay.value.length && sameDay.value[0].customer_id !== form.value.customer_id) {
+        form.value.lines.forEach((l) => { l.appointment = null; });
+        sameDay.value = [];
+        appointmentLabel.value = null;
+    }
+    await Promise.all(form.value.lines.map(refreshPackages));
+}
 
 async function onServiceChange(line: ServiceLine): Promise<void> {
     const serviceId = line.service_id;
@@ -138,19 +153,35 @@ async function openCreate(appointmentId?: number): Promise<void> {
     await loadOptions();
     errors.value = {};
     appointmentLabel.value = null;
-    form.value = { customer_id: null, appointment_id: null, date: new Date(), observations: '', measurements: '', lines: [newLine()] };
+    sameDay.value = [];
+    form.value = { customer_id: null, date: new Date(), observations: '', measurements: '', lines: [] };
 
     if (appointmentId) {
         const a = await appointmentsApi.get(appointmentId);
-        const line = form.value.lines[0];
-        form.value.appointment_id = a.id;
         form.value.customer_id = a.customer_id;
-        line.service_id = a.service_id;
         appointmentLabel.value = [`Cita del ${dayLabel(a.appointment_date)} a las ${a.start_time}`, a.title, visitLabel(a.visit_number)].filter(Boolean).join(' · ');
-        await onServiceChange(line);
-        line.employee_id = a.employee_id;
+        await addFromAppointment(a);
+        try {
+            sameDay.value = (await appointmentsApi.range({ date: a.appointment_date, customer_id: a.customer_id }))
+                .filter((x) => x.id === a.id || ['pending', 'confirmed'].includes(x.status));
+        } catch {
+            // Solo sirve para proponer las otras citas del día: sin ellas se atiende igual.
+        }
+    } else {
+        form.value.lines.push(newLine());
     }
     dialog.value = true;
+}
+
+/** Agrega el servicio de una cita (con su especialista) y la deja ligada: al guardar queda atendida. */
+async function addFromAppointment(a: Appointment): Promise<void> {
+    form.value.lines.push({ ...newLine(), service_id: a.service_id, appointment: a });
+    const line = form.value.lines[form.value.lines.length - 1];
+    await onServiceChange(line);
+    line.employee_id = a.employee_id;
+}
+async function addAllAppointments(): Promise<void> {
+    for (const a of otherAppointments.value) await addFromAppointment(a);
 }
 
 const addLine = (): void => { form.value.lines.push(newLine()); };
@@ -164,13 +195,13 @@ async function submit(): Promise<void> {
     try {
         const created = await attendancesApi.createMany({
             customer_id: form.value.customer_id,
-            appointment_id: form.value.appointment_id,
             attended_at: isoDate(form.value.date),
             observations: form.value.observations || null,
             measurements: form.value.measurements || null,
             services: form.value.lines.map((l) => ({
                 service_id: l.service_id,
                 employee_id: l.employee_id,
+                appointment_id: l.appointment?.id ?? null,
                 customer_package_id: l.customer_package_id,
                 supplies: l.supplies.filter((s) => s.product_id && s.quantity > 0) as { product_id: number; quantity: number }[],
             })),
@@ -247,7 +278,24 @@ onMounted(async () => {
         <!-- Registro -->
         <Dialog v-model:visible="dialog" modal header="Registrar atención" :style="{ width: '720px' }" :breakpoints="{ '760px': '96vw' }">
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <Message v-if="appointmentLabel" class="md:col-span-2" severity="info" size="small">{{ appointmentLabel }}: al guardar queda como atendida.</Message>
+                <Message v-if="appointmentLabel" class="md:col-span-2" severity="info" size="small">
+                    {{ appointmentLabel }}: al guardar {{ linkedAppointments > 1 ? `quedan atendidas sus ${linkedAppointments} citas` : 'queda como atendida' }}.
+                </Message>
+                <div v-if="otherAppointments.length" class="rounded-xl border border-dashed border-brand-300 bg-brand-50/50 p-3 text-sm md:col-span-2 dark:border-brand-500/40 dark:bg-brand-500/5">
+                    <div class="mb-1 flex items-center justify-between gap-2">
+                        <p class="font-medium">{{ otherAppointments.length === 1 ? 'Ese día también tiene esta cita' : 'Ese día también tiene estas citas' }}</p>
+                        <button v-if="otherAppointments.length > 1" type="button" class="text-sm text-brand-600 hover:underline" @click="addAllAppointments">
+                            <i class="pi pi-plus text-xs"></i> Agregar todas
+                        </button>
+                    </div>
+                    <div v-for="a in otherAppointments" :key="a.id" class="flex items-center justify-between gap-2">
+                        <span class="min-w-0 truncate">
+                            <span class="font-semibold">{{ a.start_time }}</span> · {{ a.service?.name }}
+                            <span class="text-slate-500"> · {{ a.employee?.name }}</span>
+                        </span>
+                        <Button label="Agregar" icon="pi pi-plus" size="small" text class="shrink-0" @click="addFromAppointment(a)" />
+                    </div>
+                </div>
                 <div>
                     <label class="mb-1 block text-sm font-medium">Cliente *</label>
                     <Select v-model="form.customer_id" :options="customers" option-label="name" option-value="id" filter class="w-full" placeholder="Buscar cliente" :invalid="!!errors.customer_id" @change="onCustomerChange" />
@@ -265,7 +313,12 @@ onMounted(async () => {
                     </div>
                     <div v-for="(line, i) in form.lines" :key="line.key" class="rounded-xl border border-[var(--surface-border)] p-3">
                         <div v-if="form.lines.length > 1" class="-mt-1 mb-2 flex items-center justify-between">
-                            <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Servicio {{ i + 1 }}</span>
+                            <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                                Servicio {{ i + 1 }}
+                                <span v-if="line.appointment" class="ml-1 normal-case tracking-normal text-brand-600 dark:text-brand-300">
+                                    <i class="pi pi-calendar text-[10px]"></i> cita de las {{ line.appointment.start_time }}
+                                </span>
+                            </span>
                             <Button icon="pi pi-trash" text rounded size="small" severity="danger" v-tooltip.top="'Quitar este servicio'" @click="removeLine(i)" />
                         </div>
                         <div class="grid grid-cols-1 gap-3 md:grid-cols-2">

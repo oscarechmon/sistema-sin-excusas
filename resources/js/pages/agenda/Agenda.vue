@@ -14,7 +14,7 @@ import Dialog from 'primevue/dialog';
 import Tag from 'primevue/tag';
 import Message from 'primevue/message';
 import { AxiosError } from 'axios';
-import { appointmentsApi, APPOINTMENT_STATUS, isoDate, visitLabel, type Appointment, type AppointmentPayload, type AppointmentStatus } from '@/services/agenda';
+import { appointmentsApi, APPOINTMENT_STATUS, isoDate, visitLabel, type Appointment, type AppointmentStatus } from '@/services/agenda';
 import { employeesApi, type Employee } from '@/services/staff';
 import { customersApi, type Customer } from '@/services/contacts';
 import { productsApi, type Product } from '@/services/catalog';
@@ -58,14 +58,46 @@ function shift(days: number): void {
 watch([day, employeeId], load);
 
 // --- Alta / edición ------------------------------------------------------
+// Al crear, la visita puede llevar varios servicios, cada uno con su
+// especialista y su horario: se agenda una cita por cada uno (el mismo día
+// cuentan como una sola visita). Al editar se trabaja sobre una sola cita.
+interface AppointmentLine {
+    key: number;
+    service_id: number | null;
+    employee_id: number | null;
+    start_time: string;
+    end_time: string;
+    /** Duración en minutos: se conserva al mover el inicio. */
+    minutes: number;
+    employees: Employee[];
+}
+
+const toMinutes = (t: string): number => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const fromMinutes = (n: number): string => `${String(Math.floor(n / 60) % 24).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+
 const dialog = ref(false);
 const saving = ref(false);
 const errors = ref<Record<string, string[]>>({});
 const editingId = ref<number | null>(null);
 /** Cita ya atendida: su horario, servicio y especialista quedaron en la atención; solo se editan título y notas. */
 const editingAttended = ref<Appointment | null>(null);
-const form =ref<AppointmentPayload & { date: Date }>({ customer_id: null, service_id: null, employee_id: null, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date() });
-const formEmployees = ref<Employee[]>([]);
+const form = ref({
+    customer_id: null as number | null,
+    title: '',
+    notes: '',
+    status: undefined as AppointmentStatus | undefined,
+    date: new Date(),
+    lines: [] as AppointmentLine[],
+});
+
+let lineKey = 0;
+const newLine = (start: string, employee: number | null = null): AppointmentLine => ({
+    key: ++lineKey, service_id: null, employee_id: employee, start_time: start, end_time: fromMinutes(toMinutes(start) + 60), minutes: 60, employees: [],
+});
+
+/** Error de un campo de la línea: al crear llega por servicio (services.N.campo); al editar, directo. */
+const lineError = (i: number, field: string): string | undefined =>
+    (editingId.value ? errors.value[field] : errors.value[`services.${i}.${field}`])?.[0];
 
 /** Qué visita del cliente será (al crear) o es (al editar). */
 const visitNumber = ref<number | null>(null);
@@ -89,18 +121,45 @@ async function loadOptions(): Promise<void> {
     if (!customers.value.length) customers.value = await customersApi.options();
     if (!services.value.length) services.value = (await productsApi.list({ type: 'service', is_active: 1, per_page: 100, sort_by: 'name', sort_dir: 'asc' })).data;
 }
-async function refreshFormEmployees(): Promise<void> {
-    formEmployees.value = await employeesApi.options(form.value.service_id);
-    if (form.value.employee_id && !formEmployees.value.some((e) => e.id === form.value.employee_id)) form.value.employee_id = null;
+/** Especialistas que atienden el servicio de la línea (todos, si aún no hay servicio). */
+async function refreshLineEmployees(line: AppointmentLine): Promise<void> {
+    line.employees = await employeesApi.options(line.service_id);
+    if (line.employee_id && !line.employees.some((e) => e.id === line.employee_id)) line.employee_id = null;
 }
+/** Al elegir el servicio, la cita dura lo que dura el servicio (si lo tiene configurado). */
+async function onServiceChange(line: AppointmentLine): Promise<void> {
+    const minutes = services.value.find((s) => s.id === line.service_id)?.duration_minutes;
+    if (minutes) {
+        line.minutes = minutes;
+        line.end_time = fromMinutes(toMinutes(line.start_time) + minutes);
+    }
+    await refreshLineEmployees(line);
+}
+/** Al cambiar el inicio, la cita mantiene su duración. */
+function onStartChange(line: AppointmentLine): void {
+    if (line.start_time) line.end_time = fromMinutes(toMinutes(line.start_time) + line.minutes);
+}
+/** Si se ajusta el fin a mano, esa pasa a ser su duración. */
+function onEndChange(line: AppointmentLine): void {
+    const minutes = line.start_time && line.end_time ? toMinutes(line.end_time) - toMinutes(line.start_time) : 0;
+    if (minutes > 0) line.minutes = minutes;
+}
+
+/** El servicio que se agrega empieza cuando termina el anterior. */
+async function addLine(): Promise<void> {
+    const last = form.value.lines[form.value.lines.length - 1];
+    form.value.lines.push(newLine(last?.end_time || '09:00', employeeId.value));
+    await refreshLineEmployees(form.value.lines[form.value.lines.length - 1]);
+}
+const removeLine = (i: number): void => { form.value.lines.splice(i, 1); };
 
 async function openCreate(): Promise<void> {
     await loadOptions();
     editingId.value = null;
     editingAttended.value = null;
     errors.value = {};
-    form.value = { customer_id: null, service_id: null, employee_id: employeeId.value, appointment_date: '', start_time: '09:00', end_time: '10:00', title: '', notes: '', date: new Date(day.value) };
-    await refreshFormEmployees();
+    form.value = { customer_id: null, title: '', notes: '', status: undefined, date: new Date(day.value), lines: [newLine('09:00', employeeId.value)] };
+    await refreshLineEmployees(form.value.lines[0]);
     dialog.value = true;
 }
 async function openEdit(a: Appointment): Promise<void> {
@@ -108,31 +167,40 @@ async function openEdit(a: Appointment): Promise<void> {
     editingId.value = a.id;
     errors.value = {};
     form.value = {
-        customer_id: a.customer_id, service_id: a.service_id, employee_id: a.employee_id, appointment_date: a.appointment_date,
-        start_time: a.start_time, end_time: a.end_time, title: a.title ?? '', notes: a.notes ?? '', status: a.status, date: new Date(`${a.appointment_date}T00:00:00`),
+        customer_id: a.customer_id, title: a.title ?? '', notes: a.notes ?? '', status: a.status, date: new Date(`${a.appointment_date}T00:00:00`),
+        lines: [{
+            key: ++lineKey, service_id: a.service_id, employee_id: a.employee_id, start_time: a.start_time, end_time: a.end_time,
+            minutes: Math.max(5, toMinutes(a.end_time) - toMinutes(a.start_time)), employees: [],
+        }],
     };
     visitNumber.value = a.visit_number;
     editingAttended.value = a.status === 'attended' ? a : null;
     // En la atendida no se cambia el especialista: no hace falta (ni conviene) refiltrar la lista.
-    if (!editingAttended.value) await refreshFormEmployees();
+    if (!editingAttended.value) await refreshLineEmployees(form.value.lines[0]);
     dialog.value = true;
-}
-
-/** Al cambiar el inicio, la cita mantiene su duración. */
-function onStartChange(): void {
-    const [h, m] = form.value.start_time.split(':').map(Number);
-    const end = new Date(2000, 0, 1, h, m + 60);
-    form.value.end_time = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`;
 }
 
 async function submit(): Promise<void> {
     saving.value = true;
     errors.value = {};
     try {
-        const { date, ...payload } = form.value;
-        await appointmentsApi.save({ ...payload, appointment_date: isoDate(date) }, editingId.value ?? undefined);
+        const { date, lines, customer_id, title, notes, status } = form.value;
+        const appointment_date = isoDate(date);
+        if (editingId.value) {
+            const [l] = lines;
+            await appointmentsApi.save({
+                customer_id, title, notes, status, appointment_date,
+                service_id: l.service_id, employee_id: l.employee_id, start_time: l.start_time, end_time: l.end_time,
+            }, editingId.value);
+            toast.add({ severity: 'success', summary: 'Cita actualizada', life: 2000 });
+        } else {
+            const created = await appointmentsApi.createMany({
+                customer_id, title, notes, appointment_date,
+                services: lines.map((l) => ({ service_id: l.service_id, employee_id: l.employee_id, start_time: l.start_time, end_time: l.end_time })),
+            });
+            toast.add({ severity: 'success', summary: created.length === 1 ? 'Cita registrada' : `${created.length} citas registradas`, life: 2500 });
+        }
         dialog.value = false;
-        toast.add({ severity: 'success', summary: editingId.value ? 'Cita actualizada' : 'Cita registrada', life: 2000 });
         day.value = new Date(date);
         load();
     } catch (e) {
@@ -174,8 +242,6 @@ const rescheduleForm = ref({ date: new Date(), start_time: '09:00', end_time: '1
 const rescheduleEmployees = ref<Employee[]>([]);
 const todayStart = (): Date => new Date(new Date().setHours(0, 0, 0, 0));
 
-const toMinutes = (t: string): number => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
-const fromMinutes = (n: number): string => `${String(Math.floor(n / 60) % 24).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
 const shortDay = (s: string): string => new Date(`${s}T00:00:00`).toLocaleDateString('es-PE', { weekday: 'short', day: '2-digit', month: '2-digit' });
 const goToDay = (s: string): void => { day.value = new Date(`${s}T00:00:00`); };
 
@@ -320,7 +386,7 @@ onMounted(async () => {
             </DataTable>
         </div>
 
-        <Dialog v-model:visible="dialog" modal :header="editingId ? 'Editar cita' : 'Nueva cita'" :style="{ width: '560px' }">
+        <Dialog v-model:visible="dialog" modal :header="editingId ? 'Editar cita' : 'Nueva cita'" :style="{ width: '640px' }" :breakpoints="{ '680px': '96vw' }">
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div v-if="editingAttended" class="rounded-xl bg-slate-50 p-3 text-sm md:col-span-2 dark:bg-white/5">
                     <p class="font-semibold">{{ editingAttended.customer?.name }}</p>
@@ -338,37 +404,54 @@ onMounted(async () => {
                         <i class="pi pi-history mr-1 text-[11px]"></i>{{ editingId ? visitLabel(visitNumber) : visitNumber === 1 ? 'Será su primera visita' : `Será su visita N.º ${visitNumber}` }}
                     </p>
                 </div>
-                <div class="md:col-span-2">
+                <div :class="{ 'md:col-span-2': editingAttended }">
                     <label class="mb-1 block text-sm font-medium">Título</label>
                     <InputText v-model="form.title" maxlength="120" class="w-full" placeholder="Ej.: Evaluación inicial, Control, Retoque…" :invalid="!!errors.title" />
                     <Message v-if="errors.title" severity="error" size="small" variant="simple">{{ errors.title[0] }}</Message>
                 </div>
-                <template v-if="!editingAttended">
-                    <div>
-                        <label class="mb-1 block text-sm font-medium">Servicio *</label>
-                        <Select v-model="form.service_id" :options="services" option-label="name" option-value="id" filter class="w-full" :invalid="!!errors.service_id" @change="refreshFormEmployees" />
+                <div v-if="!editingAttended">
+                    <label class="mb-1 block text-sm font-medium">Fecha *</label>
+                    <DatePicker v-model="form.date" date-format="dd/mm/yy" show-icon class="w-full" :invalid="!!errors.appointment_date" />
+                    <Message v-if="errors.appointment_date" severity="error" size="small" variant="simple">{{ errors.appointment_date[0] }}</Message>
+                </div>
+
+                <div v-if="!editingAttended" class="space-y-3 md:col-span-2">
+                    <div v-if="!editingId" class="flex items-center justify-between">
+                        <label class="text-sm font-medium">Servicios</label>
+                        <button type="button" class="text-sm text-brand-600 hover:underline" @click="addLine"><i class="pi pi-plus text-xs"></i> Agregar otro servicio</button>
                     </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium">Especialista *</label>
-                        <Select v-model="form.employee_id" :options="formEmployees" option-label="name" option-value="id" class="w-full" :invalid="!!errors.employee_id" />
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium">Fecha *</label>
-                        <DatePicker v-model="form.date" date-format="dd/mm/yy" show-icon class="w-full" :invalid="!!errors.appointment_date" />
-                        <Message v-if="errors.appointment_date" severity="error" size="small" variant="simple">{{ errors.appointment_date[0] }}</Message>
-                    </div>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="mb-1 block text-sm font-medium">Inicio</label>
-                            <InputText v-model="form.start_time" type="time" class="w-full" @change="onStartChange" />
+                    <div v-for="(line, i) in form.lines" :key="line.key" :class="{ 'rounded-xl border border-[var(--surface-border)] p-3': !editingId }">
+                        <div v-if="form.lines.length > 1" class="-mt-1 mb-2 flex items-center justify-between">
+                            <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Servicio {{ i + 1 }}</span>
+                            <Button icon="pi pi-trash" text rounded size="small" severity="danger" v-tooltip.top="'Quitar este servicio'" @click="removeLine(i)" />
                         </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium">Fin</label>
-                            <InputText v-model="form.end_time" type="time" class="w-full" :invalid="!!errors.end_time" />
+                        <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <div>
+                                <label class="mb-1 block text-sm font-medium">Servicio *</label>
+                                <Select v-model="line.service_id" :options="services" option-label="name" option-value="id" filter class="w-full" :invalid="!!lineError(i, 'service_id')" @change="onServiceChange(line)" />
+                                <Message v-if="lineError(i, 'service_id')" severity="error" size="small" variant="simple">{{ lineError(i, 'service_id') }}</Message>
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-medium">Especialista *</label>
+                                <Select v-model="line.employee_id" :options="line.employees" option-label="name" option-value="id" class="w-full" :invalid="!!lineError(i, 'employee_id')" />
+                                <Message v-if="lineError(i, 'employee_id')" severity="error" size="small" variant="simple">{{ lineError(i, 'employee_id') }}</Message>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3 md:col-span-2">
+                                <div>
+                                    <label class="mb-1 block text-sm font-medium">Inicio</label>
+                                    <InputText v-model="line.start_time" type="time" class="w-full" :invalid="!!lineError(i, 'start_time')" @change="onStartChange(line)" />
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-sm font-medium">Fin</label>
+                                    <InputText v-model="line.end_time" type="time" class="w-full" :invalid="!!lineError(i, 'end_time')" @change="onEndChange(line)" />
+                                </div>
+                                <Message v-if="lineError(i, 'start_time') || lineError(i, 'end_time')" class="col-span-2" severity="error" size="small" variant="simple">
+                                    {{ lineError(i, 'start_time') || lineError(i, 'end_time') }}
+                                </Message>
+                            </div>
                         </div>
                     </div>
-                    <Message v-if="errors.end_time" class="md:col-span-2" severity="error" size="small" variant="simple">{{ errors.end_time[0] }}</Message>
-                </template>
+                </div>
                 <div class="md:col-span-2">
                     <label class="mb-1 block text-sm font-medium">Notas</label>
                     <Textarea v-model="form.notes" rows="2" auto-resize class="w-full" />

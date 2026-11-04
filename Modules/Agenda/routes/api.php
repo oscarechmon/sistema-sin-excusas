@@ -13,6 +13,7 @@ Route::middleware('auth:sanctum')->group(function (): void {
         Route::get('/', 'index')->middleware('permission:appointments.view');
         Route::get('visit-number', 'visitNumber')->middleware('permission:appointments.view');
         Route::post('/', 'store')->middleware('permission:appointments.create');
+        Route::post('batch', 'storeMany')->middleware('permission:appointments.create');
         Route::get('{appointment}', 'show')->whereNumber('appointment')->middleware('permission:appointments.view');
         Route::match(['put', 'patch'], '{appointment}', 'update')->whereNumber('appointment')->middleware('permission:appointments.edit');
         Route::post('{appointment}/status', 'status')->whereNumber('appointment')->middleware('permission:appointments.edit');

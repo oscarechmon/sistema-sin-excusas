@@ -50,6 +50,15 @@ export interface AppointmentPayload {
     notes?: string | null;
 }
 
+/** Varios servicios en la misma visita: datos comunes y una línea por servicio (una cita por cada una). */
+export interface AppointmentBatchPayload {
+    customer_id: number | null;
+    appointment_date: string;
+    title?: string | null;
+    notes?: string | null;
+    services: { service_id: number | null; employee_id: number | null; start_time: string; end_time: string }[];
+}
+
 export const APPOINTMENT_STATUS: Record<AppointmentStatus, { label: string; severity: string }> = {
     pending: { label: 'Pendiente', severity: 'warn' },
     confirmed: { label: 'Confirmada', severity: 'info' },
@@ -105,6 +114,8 @@ export interface AttendanceBatchPayload {
     services: {
         service_id: number | null;
         employee_id: number | null;
+        /** La cita de ese servicio, si la visita se agendó con varias: queda atendida. */
+        appointment_id?: number | null;
         customer_package_id?: number | null;
         supplies: { product_id: number; quantity: number }[];
     }[];
@@ -133,6 +144,10 @@ export const appointmentsApi = {
         const res = id ? await http.put(`/appointments/${id}`, payload) : await http.post('/appointments', payload);
         return unwrap<Appointment>(res);
     },
+    /** Una cita por servicio de la misma visita, todas o ninguna. */
+    async createMany(payload: AppointmentBatchPayload): Promise<Appointment[]> {
+        return unwrap<Appointment[]>(await http.post('/appointments/batch', payload));
+    },
     /** Qué número de visita sería una cita nueva del cliente ese día. */
     async visitNumber(customerId: number, date: string): Promise<number> {
         return unwrap<{ visit_number: number }>(await http.get('/appointments/visit-number', { params: { customer_id: customerId, date } })).visit_number;
@@ -159,7 +174,7 @@ export const attendancesApi = {
     async create(payload: AttendancePayload): Promise<Attendance> {
         return unwrap<Attendance>(await http.post('/attendances', payload));
     },
-    /** Una atención por servicio, todas o ninguna (la cita la cierra el primero). */
+    /** Una atención por servicio, todas o ninguna (cada una cierra su cita, si la trae). */
     async createMany(payload: AttendanceBatchPayload): Promise<Attendance[]> {
         return unwrap<Attendance[]>(await http.post('/attendances/batch', payload));
     },

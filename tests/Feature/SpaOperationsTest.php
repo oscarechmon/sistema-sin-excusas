@@ -229,6 +229,49 @@ class SpaOperationsTest extends TestCase
             ->assertOk()->assertJsonPath('data.visit_number', 4);
     }
 
+    public function test_una_cita_puede_agendar_varios_servicios_de_la_misma_visita(): void
+    {
+        $facial = $this->service(100, 'Limpieza facial');
+        $masaje = $this->service(80, 'Masaje relajante');
+        $meri = $this->employee();
+        $lucero = $this->employee();
+        $customer = Customer::factory()->create();
+        $date = today()->addDay()->toDateString();
+        $book = fn (array $services) => $this->postJson('/api/v1/appointments/batch', [
+            'customer_id' => $customer->id, 'appointment_date' => $date,
+            'title' => ' Cita 6 ', 'notes' => 'Viene con su hermana', 'services' => $services,
+        ]);
+
+        $book([
+            ['service_id' => $facial->id, 'employee_id' => $meri->id, 'start_time' => '10:00', 'end_time' => '11:00'],
+            ['service_id' => $masaje->id, 'employee_id' => $lucero->id, 'start_time' => '11:00', 'end_time' => '11:45'],
+        ])->assertCreated()
+            ->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.service_id', $facial->id)
+            ->assertJsonPath('data.1.employee_id', $lucero->id)
+            ->assertJsonPath('data.1.start_time', '11:00')
+            ->assertJsonPath('data.1.title', 'Cita 6')
+            ->assertJsonPath('data.1.notes', 'Viene con su hermana')
+            ->assertJsonPath('data.0.visit_number', 1)
+            ->assertJsonPath('data.1.visit_number', 1); // mismo día, misma visita
+
+        // Si un especialista está ocupado, el error va en su línea y no se agenda ninguna.
+        $book([
+            ['service_id' => $facial->id, 'employee_id' => $lucero->id, 'start_time' => '15:00', 'end_time' => '16:00'],
+            ['service_id' => $masaje->id, 'employee_id' => $meri->id, 'start_time' => '10:30', 'end_time' => '11:30'],
+        ])->assertStatus(422)->assertJsonPath('errors', fn ($e) => isset($e['services.1.employee_id']));
+        // También si dos servicios de la misma cita se cruzan con el mismo especialista.
+        $book([
+            ['service_id' => $facial->id, 'employee_id' => $meri->id, 'start_time' => '15:00', 'end_time' => '16:00'],
+            ['service_id' => $masaje->id, 'employee_id' => $meri->id, 'start_time' => '15:30', 'end_time' => '16:30'],
+        ])->assertStatus(422)->assertJsonPath('errors', fn ($e) => isset($e['services.1.employee_id']));
+        $this->assertSame(2, Appointment::count());
+
+        $book([['service_id' => $facial->id, 'employee_id' => $meri->id, 'start_time' => '16:00', 'end_time' => '15:00']])
+            ->assertStatus(422)->assertJsonValidationErrors('services.0.end_time');
+        $book([])->assertStatus(422)->assertJsonValidationErrors('services');
+    }
+
     public function test_en_una_cita_atendida_solo_se_editan_titulo_y_notas(): void
     {
         $service = $this->service();
@@ -393,6 +436,48 @@ class SpaOperationsTest extends TestCase
                 ['product_id' => $gel->id, 'quantity' => 1], ['product_id' => $gel->id, 'quantity' => 1],
             ]]],
         ])->assertStatus(422)->assertJsonValidationErrors('services.0.supplies');
+    }
+
+    public function test_atender_una_visita_agendada_con_varios_servicios_cierra_cada_cita(): void
+    {
+        $facial = $this->service(100, 'Limpieza facial');
+        $masaje = $this->service(80, 'Masaje relajante');
+        $meri = $this->employee();
+        $lucero = $this->employee();
+        $customer = Customer::factory()->create();
+        $other = Customer::factory()->create();
+        $appointment = fn (Customer $c, Product $s, Employee $e, string $from, string $to) => Appointment::create([
+            'customer_id' => $c->id, 'service_id' => $s->id, 'employee_id' => $e->id, 'appointment_date' => today()->toDateString(),
+            'start_time' => $from, 'end_time' => $to, 'status' => 'pending',
+        ]);
+        $first = $appointment($customer, $facial, $meri, '09:00:00', '10:00:00');
+        $second = $appointment($customer, $masaje, $lucero, '10:00:00', '11:00:00');
+        $foreign = $appointment($other, $masaje, $lucero, '12:00:00', '13:00:00');
+
+        // Una cita de otro cliente no se puede cerrar desde esta visita.
+        $this->postJson('/api/v1/attendances/batch', [
+            'customer_id' => $customer->id, 'attended_at' => today()->toDateString(),
+            'services' => [
+                ['service_id' => $facial->id, 'employee_id' => $meri->id, 'appointment_id' => $first->id],
+                ['service_id' => $masaje->id, 'employee_id' => $lucero->id, 'appointment_id' => $foreign->id],
+            ],
+        ])->assertStatus(422);
+        $this->assertSame(0, Attendance::count());
+        $this->assertSame(Appointment::STATUS_PENDING, $first->fresh()->status);
+
+        $this->postJson('/api/v1/attendances/batch', [
+            'customer_id' => $customer->id, 'appointment_id' => $first->id, 'attended_at' => today()->toDateString(),
+            'services' => [
+                ['service_id' => $facial->id, 'employee_id' => $meri->id, 'appointment_id' => $first->id],
+                ['service_id' => $masaje->id, 'employee_id' => $lucero->id, 'appointment_id' => $second->id],
+            ],
+        ])->assertCreated()
+            ->assertJsonPath('data.0.appointment_id', $first->id)
+            ->assertJsonPath('data.1.appointment_id', $second->id);
+
+        $this->assertSame(Appointment::STATUS_ATTENDED, $first->fresh()->status);
+        $this->assertSame(Appointment::STATUS_ATTENDED, $second->fresh()->status);
+        $this->assertSame(Appointment::STATUS_PENDING, $foreign->fresh()->status);
     }
 
     public function test_si_un_insumo_no_alcanza_no_se_registra_nada(): void

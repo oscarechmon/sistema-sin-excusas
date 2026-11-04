@@ -48,6 +48,11 @@ class AttendanceService
             $service = Product::where('type', Product::TYPE_SERVICE)->findOrFail($data['service_id']);
             $customerPackage = $this->customerPackage($data);
 
+            if (! empty($data['appointment_id'])
+                && ! Appointment::whereKey($data['appointment_id'])->where('customer_id', $data['customer_id'])->exists()) {
+                throw new BusinessException('Esa cita es de otro cliente.');
+            }
+
             $attendance = Attendance::create([
                 'customer_id' => $data['customer_id'],
                 'service_id' => $service->id,
@@ -93,21 +98,31 @@ class AttendanceService
     /**
      * Varios servicios en la misma visita: una atención por servicio (cada una
      * con su sesión de paquete, sus insumos y su comisión), todas o ninguna.
-     * La cita, si la hay, la cierra el primero.
+     * Cada servicio cierra su propia cita (si la visita se agendó con varias);
+     * la cita general, si llega, la cierra el primero que no trae la suya.
      *
      * @param  array<string, mixed>  $data  customer_id, appointment_id?, attended_at, observations?, measurements?,
-     *                                      services[]{service_id, employee_id, customer_package_id?, supplies[]}
+     *                                      services[]{service_id, employee_id, appointment_id?, customer_package_id?, supplies[]}
      * @return list<Attendance>
      */
     public function confirmMany(array $data, ?int $userId = null): array
     {
         return DB::transaction(function () use ($data, $userId): array {
             $common = Arr::only($data, ['customer_id', 'attended_at', 'observations', 'measurements']);
+            $pending = $data['appointment_id'] ?? null;
+            $lines = array_values($data['services']);
+            // La general no se repite si ya viene en alguna línea.
+            if ($pending && in_array((int) $pending, array_map('intval', array_filter(array_column($lines, 'appointment_id'))), true)) {
+                $pending = null;
+            }
             $attendances = [];
 
-            foreach (array_values($data['services']) as $i => $line) {
-                $appointment = ['appointment_id' => $i === 0 ? ($data['appointment_id'] ?? null) : null];
-                $attendances[] = $this->confirm($appointment + $line + $common, $userId);
+            foreach ($lines as $line) {
+                if (empty($line['appointment_id']) && $pending) {
+                    $line['appointment_id'] = $pending;
+                    $pending = null;
+                }
+                $attendances[] = $this->confirm($line + $common, $userId);
             }
 
             return $attendances;

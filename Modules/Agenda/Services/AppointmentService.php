@@ -63,6 +63,33 @@ class AppointmentService extends BaseService
         return $this->withVisit(parent::create($data)->load(['customer', 'service', 'employee']));
     }
 
+    /**
+     * Varios servicios en la misma visita: una cita por servicio, cada una con
+     * su especialista y horario, todas o ninguna. Si un especialista no está
+     * libre, el error queda en la línea de ese servicio.
+     *
+     * @param  array<string, mixed>  $data  customer_id, appointment_date, title?, notes?,
+     *                                      services[]{service_id, employee_id, start_time, end_time}
+     * @return list<Appointment>
+     */
+    public function createMany(array $data): array
+    {
+        return DB::transaction(function () use ($data): array {
+            $common = Arr::only($data, ['customer_id', 'appointment_date', 'title', 'notes']);
+            $appointments = [];
+
+            foreach (array_values($data['services']) as $i => $line) {
+                try {
+                    $appointments[] = $this->create(Arr::only($line, ['service_id', 'employee_id', 'start_time', 'end_time']) + $common);
+                } catch (BusinessException $e) {
+                    throw new BusinessException($e->getMessage(), 422, ["services.{$i}.employee_id" => [$e->getMessage()]]);
+                }
+            }
+
+            return $appointments;
+        });
+    }
+
     public function update(int|string $id, array $data): Model
     {
         $data = $this->normalizeTimes($data);
