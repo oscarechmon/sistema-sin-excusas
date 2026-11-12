@@ -56,6 +56,23 @@ class CatalogSearchNamesTest extends TestCase
         $this->assertSame('Toxina botulínica - Tercio superior (3 zonas)', $botox->fresh()->name);
     }
 
+    public function test_bpl1_se_describe_como_probiotico_y_respeta_lo_editado(): void
+    {
+        $bpl1 = Product::factory()->create(['name' => 'BPL1 SLIMFLORA 210mL', 'brand_id' => null, 'description' => null]);
+        $this->migration()->up();
+        $editado = Product::factory()->create(['name' => 'BPL1 Slimflora 210 ml', 'description' => 'Texto propio.']);
+
+        $probiotic = require base_path('Modules/Catalog/Database/Migrations/2026_11_11_110000_describe_bpl1_as_probiotic.php');
+        $probiotic->up();
+
+        $this->assertStringStartsWith('Probiótico BPL1 Slimflora con Bifidobacterium animalis subsp. lactis, de uso oral', $bpl1->fresh()->description);
+        $this->assertStringContainsString('Cómpralo en línea', $bpl1->fresh()->description);
+        $this->assertSame('Texto propio.', $editado->fresh()->description);
+
+        $probiotic->down();
+        $this->assertStringStartsWith('BPL1 Slimflora en presentación de 210 ml.', $bpl1->fresh()->description);
+    }
+
     public function test_si_ya_se_renombro_a_mano_no_hace_nada(): void
     {
         $propio = Product::factory()->create(['name' => 'Omega 3 de la casa', 'description' => null]);
