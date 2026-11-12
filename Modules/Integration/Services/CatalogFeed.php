@@ -35,7 +35,7 @@ class CatalogFeed
             ->keyBy('product_id');
 
         return Product::withTrashed()
-            ->with(['category:id,name,description,sort_order', 'unit:id,name', 'images:id,product_id,path,sort_order'])
+            ->with(['category:id,name,description,sort_order', 'brand:id,name', 'unit:id,name', 'images:id,product_id,path,sort_order'])
             ->when($ids !== null, fn ($q) => $q->whereIn('id', $ids))
             ->addSelect(['web_stock' => Stock::select('quantity')
                 ->whereColumn('stocks.product_id', 'products.id')
@@ -55,6 +55,10 @@ class CatalogFeed
             'type' => $product->type,
             'code' => $product->code,
             'name' => $product->name,
+            // Marca y código de barras: Google los pide para mostrar el
+            // producto en sus resultados de compra (Merchant Center).
+            'brand' => $product->brand?->name,
+            'barcode' => $product->barcode,
             'description' => $product->description,
             'category' => $product->category?->name,
             'category_description' => $product->category?->description,

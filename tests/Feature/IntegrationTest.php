@@ -8,6 +8,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Testing\TestResponse;
+use Modules\Catalog\Models\Brand;
 use Modules\Catalog\Models\Product;
 use Modules\Integration\Services\CatalogNotifier;
 use Modules\Inventory\Models\InventoryMovement;
@@ -88,6 +89,19 @@ class IntegrationTest extends TestCase
         $this->assertNull($items[$facial->id]['stock'], 'Un servicio no lleva stock.');
 
         $this->assertFalse($items[$retirado->id]['active'], 'Lo eliminado llega como inactivo para que la web lo oculte.');
+    }
+
+    public function test_el_catalogo_trae_marca_y_codigo_de_barras(): void
+    {
+        $marca = Brand::factory()->create(['name' => 'Nutricost']);
+        $omega = Product::factory()->create(['brand_id' => $marca->id, 'barcode' => '810014671147']);
+        $sinMarca = Product::factory()->create(['brand_id' => null, 'barcode' => null]);
+
+        $items = collect($this->api('GET', 'catalog')->assertOk()->json('data'))->keyBy('id');
+
+        $this->assertSame('Nutricost', $items[$omega->id]['brand']);
+        $this->assertSame('810014671147', $items[$omega->id]['barcode']);
+        $this->assertNull($items[$sinMarca->id]['brand']);
     }
 
     public function test_el_catalogo_se_puede_pedir_por_ids(): void
